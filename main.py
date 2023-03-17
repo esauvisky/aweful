@@ -119,7 +119,7 @@ def create_datagen():
 
 def apply_augmentation(X, datagen, batch_size):
     X_augmented = []
-    for i in range(len(X)):
+    for i in tqdm(range(len(X))):
         images = X[i]
         augmented = np.stack([datagen.random_transform(image) for image in images], axis=0)
         X_augmented.append(augmented)
