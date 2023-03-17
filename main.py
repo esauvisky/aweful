@@ -39,7 +39,7 @@ def create_convlstm_model():
 
     model.add(
         ConvLSTM2D(
-            filters=4,
+            filters=32,
             kernel_size=(3, 3),
             activation='tanh',
             recurrent_dropout=0.2,
@@ -47,36 +47,35 @@ def create_convlstm_model():
             input_shape=(SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1),
         ))
 
-    # model.add(MaxPooling3D(pool_size=(1, 2, 2)))
-    # model.add(TimeDistributed(Dropout(0.2)))
-    # model.add(
-    #     ConvLSTM2D(
-    #         filters=8,
-    #         kernel_size=(3, 3),
-    #         activation='tanh',
-    #         recurrent_dropout=0.2,
-    #         return_sequences=True,
-    #     ))
-    # model.add(MaxPooling3D(pool_size=(1, 2, 2)))
-    # model.add(TimeDistributed(Dropout(0.2)))
-    # model.add(
-    #     ConvLSTM2D(
-    #         filters=16,
-    #         kernel_size=(3, 3),
-    #         activation='tanh',
-    #         recurrent_dropout=0.2,
-    #         return_sequences=True,
-    #     ))
-    # model.add(MaxPooling3D(pool_size=(1, 2, 2)))
+    model.add(MaxPooling3D(pool_size=(1, 2, 2)))
+    model.add(TimeDistributed(Dropout(0.2)))
+    model.add(
+        ConvLSTM2D(
+            filters=64,
+            kernel_size=(3, 3),
+            activation='tanh',
+            recurrent_dropout=0.2,
+            return_sequences=True,
+        ))
+    model.add(MaxPooling3D(pool_size=(1, 2, 2)))
+    model.add(TimeDistributed(Dropout(0.2)))
+    model.add(
+        ConvLSTM2D(
+            filters=128,
+            kernel_size=(3, 3),
+            activation='tanh',
+            recurrent_dropout=0.2,
+            return_sequences=True,
+        ))
+    model.add(MaxPooling3D(pool_size=(1, 2, 2)))
 
     model.add(Flatten())
-    # model.add(Dense(128, activation='relu'))
+    model.add(Dense(256, activation='relu'))
     model.add(Dense(1, activation='sigmoid'))
 
     model.summary()
     return model
 
-from keras.preprocessing.image import ImageDataGenerator
 
 def load_data(images_path):
     # Define data generator with augmentation parameters
