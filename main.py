@@ -3,6 +3,7 @@ import argparse
 import os
 import sys
 
+import random
 import keras
 import numpy as np
 from keras.callbacks import EarlyStopping, ReduceLROnPlateau
@@ -11,18 +12,21 @@ from keras.models import Model
 from keras.optimizers import Adam
 from keras.preprocessing.image import ImageDataGenerator, image_utils
 from loguru import logger
+import tensorflow as tf
 from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
+
+from keras import mixed_precision
 
 # Define default hyperparameters
 SEQUENCE_LENGTH = 15
 IMAGE_HEIGHT = 480 // 8
 IMAGE_WIDTH = 640 // 8
-BATCH_SIZE = 8
-EPOCHS = 10
+BATCH_SIZE = 32
+EPOCHS = 50
 LEARNING_RATE = 1e-4
-PATIENCE = 3
+PATIENCE = 5
 FILENAME = f'weights-{SEQUENCE_LENGTH}_{IMAGE_HEIGHT}_{IMAGE_WIDTH}.h5'
 
 
@@ -63,12 +67,13 @@ def setup_logging(level="DEBUG", show_module=False):
 def create_model(input_shape):
     """Create a ConvLSTM model."""
     inputs = Input(shape=input_shape)
-    x = ConvLSTM2D(filters=4, kernel_size=(3, 3), activation="tanh", recurrent_dropout=0.2, return_sequences=True)(inputs)
+    x = ConvLSTM2D(filters=2, kernel_size=(3, 3), activation="tanh", recurrent_dropout=0.2, return_sequences=True)(inputs)
     x = Flatten()(x)
+    # x = Dense(64, activation="sigmoid")(x)
     outputs = Dense(1, activation="sigmoid")(x)
-    model = Model(inputs=inputs, outputs=outputs)
-    model.summary()
-    return model
+    out_model = Model(inputs=inputs, outputs=outputs)
+    out_model.summary()
+    return out_model
 
 
 def load_data(images_path, seq_length, image_height, image_width):
@@ -107,38 +112,47 @@ def load_data(images_path, seq_length, image_height, image_width):
     return X, y
 
 
-def create_datagen():
-    return ImageDataGenerator(rotation_range=10,
-                              width_shift_range=0.1,
-                              height_shift_range=0.1,
-                              shear_range=0.1,
-                              zoom_range=0.1,
-                              horizontal_flip=True,
-                              fill_mode="nearest")
-
-
-def apply_augmentation(X, datagen, batch_size):
+def apply_augmentation(X, n_augmentations):
+    datagen = ImageDataGenerator(rotation_range=10, width_shift_range=0.2, height_shift_range=0.2, zoom_range=0.2)
     X_augmented = []
     for i in tqdm(range(len(X))):
         images = X[i]
-        augmented = np.stack([datagen.random_transform(image) for image in images], axis=0)
-        X_augmented.append(augmented)
+        seed = random.randint(0, 1000)
+        augmented_sequences = [
+            np.stack([datagen.random_transform(image, seed=seed) for image in images], axis=0) for _ in range(n_augmentations)]
+        X_augmented.extend(augmented_sequences)
     return np.array(X_augmented)
 
 
 if __name__ == "__main__":
     args = parse_args()
     setup_logging("DEBUG" if args.debug else "INFO")
+    logger.info(f"Num GPUs Available: {len(tf.config.list_physical_devices('GPU'))}")
 
-    # Load the data and labels
-    X, y = load_data(args.data_dir, args.seq_length, args.image_height, args.image_width)
+    # Enable mixed precision training
+    policy = mixed_precision.Policy("mixed_float16")
+    mixed_precision.set_global_policy(policy)
 
-    # Split the data into training and validation sets
-    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, shuffle=True)
+    if os.path.exists(".data"):
+        X, y = np.load(".data/X.npy"), np.load(".data/y.npy")
+        X_train, y_train = np.load(".data/X_train.npy"), np.load(".data/y_train.npy")
+        X_val, y_val = np.load(".data/X_val.npy"), np.load(".data/y_val.npy")
+    else:
+        X, y = load_data(args.data_dir, args.seq_length, args.image_height, args.image_width)
+        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, shuffle=True)
 
-    # Apply data augmentation
-    datagen = create_datagen()
-    X_train = apply_augmentation(X_train, datagen, args.batch_size)
+        X_train_aug = apply_augmentation(X_train, n_augmentations=1)
+        y_train_aug = np.tile(y_train, 1) # Repeat the labels for the augmented sequences
+
+        X_train = np.concatenate((X_train, X_train_aug), axis=0)
+        y_train = np.concatenate((y_train, y_train_aug), axis=0)
+        os.makedirs(".data")
+        np.save(".data/X.npy", X)
+        np.save(".data/y.npy", y)
+        np.save(".data/X_train.npy", X_train)
+        np.save(".data/y_train.npy", y_train)
+        np.save(".data/X_val.npy", X_val)
+        np.save(".data/y_val.npy", y_val)
 
     # Create the ConvLSTM model
     input_shape = (args.seq_length, args.image_height, args.image_width, 1)
@@ -150,29 +164,30 @@ if __name__ == "__main__":
 
     # Define the callbacks
     callbacks = [
-        ReduceLROnPlateau(monitor="val_loss",
-                          factor=0.1,
-                          patience=args.patience,
-                          verbose=1,
-                          mode="auto",
-                          min_delta=0.0001),
-        EarlyStopping(monitor="val_loss", patience=args.patience, verbose=1, mode="auto", min_delta=0.0001),]
+                   # ReduceLROnPlateau(monitor="val_loss",
+                   #                   factor=0.01,
+                   #                   patience=args.patience,
+                   #                   verbose=1,
+                   #                   mode="auto",
+                   #                   min_delta=0.00005),
+                   # EarlyStopping(monitor="val_loss", patience=args.patience, verbose=1, mode="min", min_delta=0.00001)
+    ]
 
-    if not os.path.exists(FILENAME):
-        # Train the model
-        history = model.fit(
-            X_train,
-            y_train,
-            batch_size=args.batch_size,
-            epochs=args.epochs,
-            validation_data=(X_val, y_val),
-            callbacks=callbacks,
-        )
-
-        # Save the model weights
-        model.save_weights(args.filename)
-    else:
+    if os.path.exists(FILENAME):
         model.load_weights(FILENAME)
+
+    # Train the model
+    history = model.fit(
+        X_train,
+        y_train,
+        batch_size=args.batch_size,
+        epochs=args.epochs,
+        validation_data=(X_val, y_val),
+        callbacks=callbacks,
+    )
+
+    # Save the model weights
+    model.save_weights(args.filename)
 
     # Evaluate the model on the test set
     loss, acc = model.evaluate(X_val, y_val, verbose=0)
@@ -186,11 +201,11 @@ if __name__ == "__main__":
     logger.info("\nConfusion matrix:\n" + str(confusion_matrix(y_val, y_pred_classes)))
     logger.info("\nClassification report:\n" + str(classification_report(y_val, y_pred_classes)))
 
-    model_predictions = model.predict(X_val)
+    model_predictions = model.predict(X)
     model_predictions = (model_predictions > 0.5).astype(int)
 
     # check and show results
     last_result = 0
     for i in range(len(model_predictions)):
-        if model_predictions[i] != y_val[i]:
-            logger.warning(f"{i} was predicted {'sleep' if model_predictions[i] else 'not sleep'} and is actually {'sleep' if y_val[i] else 'not sleep'}")
+        if model_predictions[i] != y[i]:
+            logger.warning(f"{i} was predicted {'sleep' if model_predictions[i] else 'not sleep'} and is actually {'sleep' if y[i] else 'not sleep'}")
