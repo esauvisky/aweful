@@ -1,21 +1,51 @@
-#!/usr/bin/python
+#!/usr/bin/env python3
+import argparse
 import os
 import sys
 
+import keras
 import numpy as np
-from keras.callbacks import EarlyStopping
-from keras.layers import (ConvLSTM2D, Dense, Dropout, Flatten, MaxPooling3D, TimeDistributed)
-from keras.models import Sequential
-from keras.preprocessing.image import image_utils
-from tqdm import tqdm
+from keras.callbacks import EarlyStopping, ReduceLROnPlateau
+from keras.layers import ConvLSTM2D, Dense, Dropout, Flatten, Input, MaxPooling3D, TimeDistributed
+from keras.models import Model
+from keras.optimizers import Adam
+from keras.preprocessing.image import ImageDataGenerator, image_utils
 from loguru import logger
+from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.model_selection import train_test_split
+from tqdm import tqdm
 
+# Define default hyperparameters
 SEQUENCE_LENGTH = 15
-IMAGE_HEIGHT = 480 // 5
-IMAGE_WIDTH = 640 // 5
+IMAGE_HEIGHT = 480 // 8
+IMAGE_WIDTH = 640 // 8
+BATCH_SIZE = 8
 EPOCHS = 10
+LEARNING_RATE = 1e-4
+PATIENCE = 3
 FILENAME = f'weights-{SEQUENCE_LENGTH}_{IMAGE_HEIGHT}_{IMAGE_WIDTH}.h5'
+
+
+def parse_args():
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(description="Train a ConvLSTM model on video frames.")
+    parser.add_argument("--data-dir", type=str, default="./data/", help="Directory containing the data.")
+    parser.add_argument("--seq-length", type=int, default=SEQUENCE_LENGTH, help="Sequence length.")
+    parser.add_argument("--image-height", type=int, default=IMAGE_HEIGHT, help="Image height.")
+    parser.add_argument("--image-width", type=int, default=IMAGE_WIDTH, help="Image width.")
+    parser.add_argument("--batch-size", type=int, default=BATCH_SIZE, help="Batch size.")
+    parser.add_argument("--epochs", type=int, default=EPOCHS, help="Number of epochs.")
+    parser.add_argument("--lr", type=float, default=LEARNING_RATE, help="Learning rate.")
+    parser.add_argument("--patience",
+                        type=int,
+                        default=PATIENCE,
+                        help="Number of epochs with no improvement to wait before reducing the learning rate.")
+    parser.add_argument("--filename",
+                        type=str,
+                        default=FILENAME,
+                        help="Name of the file to save the trained model weights.")
+    parser.add_argument("--debug", action="store_true", help="Enable debug mode.")
+    return parser.parse_args()
 
 
 def setup_logging(level="DEBUG", show_module=False):
@@ -30,74 +60,46 @@ def setup_logging(level="DEBUG", show_module=False):
     logger.add(sys.stderr, level=log_level, format=log_fmt, colorize=True, backtrace=True, diagnose=True)
 
 
-def create_convlstm_model():
-    '''
-    This function will construct the required convlstm model.
-    Returns:
-        model: It is the required constructed convlstm model.
-    '''
-    model = Sequential()
-
-    model.add(
-        ConvLSTM2D(
-            filters=4,
-            kernel_size=(3, 3),
-            activation='tanh',
-            recurrent_dropout=0.2,
-            return_sequences=True,
-            input_shape=(SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1),
-        ))
-
-    # model.add(MaxPooling3D(pool_size=(1, 2, 2)))
-    # model.add(TimeDistributed(Dropout(0.2)))
-    # model.add(
-    #     ConvLSTM2D(
-    #         filters=8,
-    #         kernel_size=(3, 3),
-    #         activation='tanh',
-    #         recurrent_dropout=0.2,
-    #         return_sequences=True,
-    #     ))
-    # model.add(MaxPooling3D(pool_size=(1, 2, 2)))
-    # model.add(TimeDistributed(Dropout(0.2)))
-    # model.add(
-    #     ConvLSTM2D(
-    #         filters=16,
-    #         kernel_size=(3, 3),
-    #         activation='tanh',
-    #         recurrent_dropout=0.2,
-    #         return_sequences=True,
-    #     ))
-    # model.add(MaxPooling3D(pool_size=(1, 2, 2)))
-
-    model.add(Flatten())
-    model.add(Dense(128, activation='relu'))
-    model.add(Dense(1, activation='sigmoid'))
-
+def create_model(input_shape):
+    """Create a ConvLSTM model."""
+    inputs = Input(shape=input_shape)
+    x = ConvLSTM2D(filters=4, kernel_size=(3, 3), activation="tanh", recurrent_dropout=0.2, return_sequences=True)(inputs)
+    x = Flatten()(x)
+    outputs = Dense(1, activation="sigmoid")(x)
+    model = Model(inputs=inputs, outputs=outputs)
     model.summary()
     return model
 
 
-def load_data(images_path):
+def load_data(images_path, seq_length, image_height, image_width):
+    """Load the data and labels."""
     X, y = [], []
     images = []
     labels = []
-    for file in tqdm(list(sorted(os.listdir(images_path), key=lambda x: int(x.split('.')[0].split('-')[0])))):
-        if file.endswith('.jpg'):
+    for file in tqdm(
+            sorted(os.listdir(images_path), key=lambda x: int(x.split(".")[0].split("-")[0])),
+            total=len(os.listdir(images_path)),
+    ):
+        if file.endswith(".jpg"):
             logger.debug(f"Loading {file}")
-            image = image_utils.load_img(os.path.join(images_path, file), keep_aspect_ratio=True, target_size=(IMAGE_HEIGHT, IMAGE_WIDTH), color_mode="grayscale")
+            image = image_utils.load_img(
+                os.path.join(images_path, file),
+                keep_aspect_ratio=True,
+                target_size=(image_height, image_width),
+                color_mode="grayscale",
+            )
             image = image_utils.img_to_array(image) / 255.0
             images.append(image)
-            if 'sleep' in file:
+            if "sleep" in file:
                 labels.append(1)
             else:
                 labels.append(0)
-        if len(images) == SEQUENCE_LENGTH:
+        if len(images) == seq_length:
             X.append(np.array(images))
             y.append(labels[-1])
             images.pop(0)
             labels.pop(0)
-        if len(images) > SEQUENCE_LENGTH:
+        if len(images) > seq_length:
             images.pop(0)
             labels.pop(0)
     X = np.array(X)
@@ -106,42 +108,68 @@ def load_data(images_path):
 
 
 if __name__ == "__main__":
-    setup_logging("INFO")
+    args = parse_args()
+    setup_logging(logger.level("DEBUG") if args.debug else logger.level("INFO"))
 
-    X, y = load_data("./data/")
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=True)
+    # Load the data and labels
+    X, y = load_data(args.data_dir, args.seq_length, args.image_height, args.image_width)
 
-    convlstm_model = create_convlstm_model()
-    convlstm_model.compile(loss='binary_crossentropy', optimizer='Adam', metrics=["accuracy"])
+    # Split the data into training and validation sets
+    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, shuffle=True)
 
-    # train
+    # Create the ConvLSTM model
+    input_shape = (args.seq_length, args.image_height, args.image_width, 1)
+    model = create_model(input_shape)
+
+    # Compile the model
+    optimizer = Adam(learning_rate=args.lr)
+    model.compile(loss="binary_crossentropy", optimizer=optimizer, metrics=["accuracy"])
+
+    # Define the callbacks
+    callbacks = [
+        ReduceLROnPlateau(monitor="val_loss",
+                          factor=0.1,
+                          patience=args.patience,
+                          verbose=1,
+                          mode="auto",
+                          min_delta=0.0001),
+        EarlyStopping(monitor="val_loss", patience=args.patience, verbose=1, mode="auto", min_delta=0.0001),]
 
     if not os.path.exists(FILENAME):
-        convlstm_model_training_history = convlstm_model.fit(
-            x=X_train,
-            y=y_train,
-            epochs=EPOCHS,
-            batch_size=4,
-            validation_data=(X_test, y_test),
-            callbacks=[EarlyStopping(monitor='val_accuracy', patience=3, min_delta=0.005)],
+        # Train the model
+        history = model.fit(
+            X_train,
+            y_train,
+            batch_size=args.batch_size,
+            epochs=args.epochs,
+            validation_data=(X_val, y_val),
+            callbacks=callbacks,
         )
-        convlstm_model.save_weights(FILENAME)
 
-    # predict the test set
-    convlstm_model.load_weights(FILENAME)
-    convlstm_model_predictions = convlstm_model.predict(X_test)
-    convlstm_model_predictions = (convlstm_model_predictions > 0.5).astype(int)
+        # Save the model weights
+        model.save_weights(args.filename)
+    else:
+        model.load_weights(FILENAME)
+
+    # Evaluate the model on the test set
+    loss, acc = model.evaluate(X_val, y_val, verbose=0)
+    logger.info(f"Validation accuracy: {acc:.4f}, loss: {loss:.4f}")
+
+    # Make predictions on the test set
+    y_pred = model.predict(X_val)
+    y_pred_classes = np.round(y_pred)
+
+    # Evaluate the model performance
+    print("\nConfusion matrix:")
+    print(confusion_matrix(y_val, y_pred_classes))
+    print("\nClassification report:")
+    print(classification_report(y_val, y_pred_classes))
+
+    model_predictions = model.predict(X_test)
+    model_predictions = (model_predictions > 0.5).astype(int)
 
     # check and show results
     last_result = 0
-    for i in range(len(convlstm_model_predictions)):
-        if convlstm_model_predictions[i] != y[i]:
-            logger.warning(f"This was predicted {'sleep' if convlstm_model_predictions[i] else 'not sleep'} and is actually {'sleep' if y[i] else 'not sleep'}")
-        #     pass
-        # else:
-        #    logger.success(f"{i+1}.jpg was predicted {'sleep' if convlstm_model_predictions[i] else 'not sleep'}!")
-        # if last_result != y[i]:
-        #     image = image_utils.array_to_img(X[i][0])
-        #     image.show()
-        #     input()
-        #     last_result = y[i]
+    for i in range(len(model_predictions)):
+        if model_predictions[i] != y_test[i]:
+            logger.warning(f"{i} was predicted {'sleep' if model_predictions[i] else 'not sleep'} and is actually {'sleep' if y_test[i] else 'not sleep'}")
