@@ -2,14 +2,11 @@
 import os
 import sys
 
-import tensorflow as tf
-from tqdm import tqdm
-import tensorflow_addons as tfa
 import numpy as np
 from keras.callbacks import EarlyStopping
 from keras.layers import (ConvLSTM2D, Dense, Dropout, Flatten, MaxPooling3D, TimeDistributed)
 from keras.models import Sequential
-from keras.preprocessing.image import image_utils, ImageDataGenerator
+from keras.preprocessing.image import image_utils
 from loguru import logger
 from sklearn.model_selection import train_test_split
 
@@ -42,7 +39,7 @@ def create_convlstm_model():
 
     model.add(
         ConvLSTM2D(
-            filters=32,
+            filters=4,
             kernel_size=(3, 3),
             activation='tanh',
             recurrent_dropout=0.2,
@@ -50,93 +47,68 @@ def create_convlstm_model():
             input_shape=(SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1),
         ))
 
-    model.add(MaxPooling3D(pool_size=(1, 2, 2)))
-    model.add(TimeDistributed(Dropout(0.2)))
-    model.add(
-        ConvLSTM2D(
-            filters=64,
-            kernel_size=(3, 3),
-            activation='tanh',
-            recurrent_dropout=0.2,
-            return_sequences=True,
-        ))
-    model.add(MaxPooling3D(pool_size=(1, 2, 2)))
-    model.add(TimeDistributed(Dropout(0.2)))
-    model.add(
-        ConvLSTM2D(
-            filters=128,
-            kernel_size=(3, 3),
-            activation='tanh',
-            recurrent_dropout=0.2,
-            return_sequences=True,
-        ))
-    model.add(MaxPooling3D(pool_size=(1, 2, 2)))
+    # model.add(MaxPooling3D(pool_size=(1, 2, 2)))
+    # model.add(TimeDistributed(Dropout(0.2)))
+    # model.add(
+    #     ConvLSTM2D(
+    #         filters=8,
+    #         kernel_size=(3, 3),
+    #         activation='tanh',
+    #         recurrent_dropout=0.2,
+    #         return_sequences=True,
+    #     ))
+    # model.add(MaxPooling3D(pool_size=(1, 2, 2)))
+    # model.add(TimeDistributed(Dropout(0.2)))
+    # model.add(
+    #     ConvLSTM2D(
+    #         filters=16,
+    #         kernel_size=(3, 3),
+    #         activation='tanh',
+    #         recurrent_dropout=0.2,
+    #         return_sequences=True,
+    #     ))
+    # model.add(MaxPooling3D(pool_size=(1, 2, 2)))
 
     model.add(Flatten())
-    model.add(Dense(256, activation='relu'))
+    model.add(Dense(128, activation='relu'))
     model.add(Dense(1, activation='sigmoid'))
 
     model.summary()
     return model
 
-def preprocess_image(image_path):
-    image = tf.io.read_file(image_path)
-    image = tf.image.decode_jpeg(image, channels=1)
-    image = tf.image.resize(image, [IMAGE_HEIGHT, IMAGE_WIDTH])
-    image = tf.cast(image, tf.float32) / 255.0
-    return image
 
 def load_data(images_path):
-    # Define data generator with augmentation parameters
-    datagen = ImageDataGenerator(
-        rotation_range=10,
-        zoom_range=0.1,
-        # horizontal_flip=True,
-        # validation_split=0.2,
-    )
-
-    # Load images and labels
     X, y = [], []
-    labels = []
     images = []
-    for file in tqdm(list(sorted(os.listdir(images_path), key=lambda x: int(x.split('.')[0].split('-')[0])))):
+    labels = []
+    for file in sorted(os.listdir(images_path), key=lambda x: int(x.split('.')[0].split('-')[0])):
         if file.endswith('.jpg'):
             logger.debug(f"Loading {file}")
             image = image_utils.load_img(os.path.join(images_path, file), keep_aspect_ratio=True, target_size=(IMAGE_HEIGHT, IMAGE_WIDTH), color_mode="grayscale")
             image = image_utils.img_to_array(image) / 255.0
             images.append(image)
-            # images = np.expand_dims(image, axis=0)
-            # labels = []
             if 'sleep' in file:
                 labels.append(1)
             else:
                 labels.append(0)
-
-            if len(images) == SEQUENCE_LENGTH:
-                X.append(np.array(images))
-                y.append(labels[-1])
-                images.pop(0)
-                labels.pop(0)
-            if len(images) > SEQUENCE_LENGTH:
-                images.pop(0)
-                labels.pop(0)
-            # # Apply data augmentation to the images
-            # for x_aug, y_aug in tqdm(datagen.flow(images, labels, batch_size=1)):
-            #     X.append(x_aug)
-            #     y.append(y_aug[0])
-            #     if len(X) == SEQUENCE_LENGTH:
-            #         break
-
+        if len(images) == SEQUENCE_LENGTH:
+            X.append(np.array(images))
+            y.append(labels[-1])
+            images.pop(0)
+            labels.pop(0)
+        if len(images) > SEQUENCE_LENGTH:
+            images.pop(0)
+            labels.pop(0)
     X = np.array(X)
     y = np.array(y)
     return X, y
 
 
 if __name__ == "__main__":
-    setup_logging("DEBUG")
+    setup_logging("INFO")
 
-    X, y = load_data("./data_new/")
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=True)
+    X, y = load_data("./data/")
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.5, shuffle=True)
 
     convlstm_model = create_convlstm_model()
     convlstm_model.compile(loss='binary_crossentropy', optimizer='Adam', metrics=["accuracy"])
@@ -148,9 +120,9 @@ if __name__ == "__main__":
             x=X_train,
             y=y_train,
             epochs=EPOCHS,
-            batch_size=2,
+            batch_size=8,
             validation_data=(X_test, y_test),
-            callbacks=[EarlyStopping(monitor='val_accuracy', patience=5, min_delta=0.001)],
+            callbacks=[EarlyStopping(monitor='val_accuracy', patience=5, min_delta=0.02)],
         )
         convlstm_model.save_weights(FILENAME)
 
