@@ -107,6 +107,25 @@ def load_data(images_path, seq_length, image_height, image_width):
     return X, y
 
 
+def create_datagen():
+    return ImageDataGenerator(rotation_range=10,
+                              width_shift_range=0.1,
+                              height_shift_range=0.1,
+                              shear_range=0.1,
+                              zoom_range=0.1,
+                              horizontal_flip=True,
+                              fill_mode="nearest")
+
+
+def apply_augmentation(X, datagen, batch_size):
+    X_augmented = []
+    for i in range(len(X)):
+        images = X[i]
+        augmented = np.stack([datagen.random_transform(image) for image in images], axis=0)
+        X_augmented.append(augmented)
+    return np.array(X_augmented)
+
+
 if __name__ == "__main__":
     args = parse_args()
     setup_logging("DEBUG" if args.debug else "INFO")
@@ -116,6 +135,10 @@ if __name__ == "__main__":
 
     # Split the data into training and validation sets
     X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, shuffle=True)
+
+    # Apply data augmentation
+    datagen = create_datagen()
+    X_train = apply_augmentation(X_train, datagen, args.batch_size)
 
     # Create the ConvLSTM model
     input_shape = (args.seq_length, args.image_height, args.image_width, 1)
@@ -160,8 +183,8 @@ if __name__ == "__main__":
     y_pred_classes = np.round(y_pred)
 
     # Evaluate the model performance
-    logger.info("\nConfusion matrix:\n" + confusion_matrix(y_val, y_pred_classes))
-    logger.info("\nClassification report:\n" + classification_report(y_val, y_pred_classes))
+    logger.info("\nConfusion matrix:\n" + str(confusion_matrix(y_val, y_pred_classes)))
+    logger.info("\nClassification report:\n" + str(classification_report(y_val, y_pred_classes)))
 
     model_predictions = model.predict(X_val)
     model_predictions = (model_predictions > 0.5).astype(int)
