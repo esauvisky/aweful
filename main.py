@@ -79,33 +79,35 @@ def create_convlstm_model():
 
 def load_data(images_path):
     # Define data generator with augmentation parameters
-    datagen = ImageDataGenerator(
-        rotation_range=10,
-        zoom_range=0.1,
-        horizontal_flip=True,
-        validation_split=0.2,
-    )
+    data_augmentation = tf.keras.Sequential([
+        tf.keras.layers.experimental.preprocessing.RandomRotation(0.1),
+        tf.keras.layers.experimental.preprocessing.RandomZoom(0.1),
+        tf.keras.layers.experimental.preprocessing.RandomFlip("horizontal"),])
 
     # Load images and labels
-    X, y = [], []
-    for file in sorted(os.listdir(images_path), key=lambda x: int(x.split('.')[0].split('-')[0])):
-        if file.endswith('.jpg'):
-            logger.debug(f"Loading {file}")
-            image = image_utils.load_img(os.path.join(images_path, file), keep_aspect_ratio=True, target_size=(IMAGE_HEIGHT, IMAGE_WIDTH), color_mode="grayscale")
-            image = image_utils.img_to_array(image) / 255.0
-            images = np.expand_dims(image, axis=0)
-            labels = []
-            if 'sleep' in file:
-                labels.append(1)
-            else:
-                labels.append(0)
+    dataset = tf.keras.preprocessing.image_dataset_from_directory(images_path,
+                                                                  labels="inferred",
+                                                                  label_mode="binary",
+                                                                  class_names=["not_sleep", "sleep"],
+                                                                  color_mode="grayscale",
+                                                                  batch_size=1,
+                                                                  image_size=(IMAGE_HEIGHT, IMAGE_WIDTH),
+                                                                  shuffle=True,
+                                                                  seed=42,
+                                                                  validation_split=0.2,
+                                                                  subset="training")
 
-            # Apply data augmentation to the images
-            for x_aug, y_aug in datagen.flow(images, labels, batch_size=1):
-                X.append(x_aug)
-                y.append(y_aug[0])
-                if len(X) == SEQUENCE_LENGTH:
-                    break
+    X, y = [], []
+    for images, labels in dataset:
+        for image, label in zip(images, labels):
+            # Apply data augmentation to the image
+            augmented_image = data_augmentation(image)
+            X.append(augmented_image.numpy())
+            y.append(label.numpy())
+
+            # Break after collecting SEQUENCE_LENGTH samples
+            if len(X) == SEQUENCE_LENGTH:
+                break
 
     X = np.array(X)
     y = np.array(y)
