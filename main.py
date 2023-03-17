@@ -2,11 +2,14 @@
 import os
 import sys
 
+import tensorflow as tf
+from tqdm import tqdm
+import tensorflow_addons as tfa
 import numpy as np
 from keras.callbacks import EarlyStopping
 from keras.layers import (ConvLSTM2D, Dense, Dropout, Flatten, MaxPooling3D, TimeDistributed)
 from keras.models import Sequential
-from keras.preprocessing.image import image_utils
+from keras.preprocessing.image import image_utils, ImageDataGenerator
 from loguru import logger
 from sklearn.model_selection import train_test_split
 
@@ -76,38 +79,53 @@ def create_convlstm_model():
     model.summary()
     return model
 
+def preprocess_image(image_path):
+    image = tf.io.read_file(image_path)
+    image = tf.image.decode_jpeg(image, channels=1)
+    image = tf.image.resize(image, [IMAGE_HEIGHT, IMAGE_WIDTH])
+    image = tf.cast(image, tf.float32) / 255.0
+    return image
 
 def load_data(images_path):
     # Define data generator with augmentation parameters
-    data_augmentation = tf.keras.Sequential([
-        tf.keras.layers.experimental.preprocessing.RandomRotation(0.1),
-        tf.keras.layers.experimental.preprocessing.RandomZoom(0.1),
-        tf.keras.layers.experimental.preprocessing.RandomFlip("horizontal"),])
+    datagen = ImageDataGenerator(
+        rotation_range=10,
+        zoom_range=0.1,
+        # horizontal_flip=True,
+        # validation_split=0.2,
+    )
 
     # Load images and labels
-    dataset = tf.keras.preprocessing.image_dataset_from_directory(images_path,
-                                                                  labels="inferred",
-                                                                  label_mode="binary",
-                                                                  class_names=["not_sleep", "sleep"],
-                                                                  color_mode="grayscale",
-                                                                  batch_size=1,
-                                                                  image_size=(IMAGE_HEIGHT, IMAGE_WIDTH),
-                                                                  shuffle=True,
-                                                                  seed=42,
-                                                                  validation_split=0.2,
-                                                                  subset="training")
-
     X, y = [], []
-    for images, labels in dataset:
-        for image, label in zip(images, labels):
-            # Apply data augmentation to the image
-            augmented_image = data_augmentation(image)
-            X.append(augmented_image.numpy())
-            y.append(label.numpy())
+    labels = []
+    images = []
+    for file in tqdm(list(sorted(os.listdir(images_path), key=lambda x: int(x.split('.')[0].split('-')[0])))):
+        if file.endswith('.jpg'):
+            logger.debug(f"Loading {file}")
+            image = image_utils.load_img(os.path.join(images_path, file), keep_aspect_ratio=True, target_size=(IMAGE_HEIGHT, IMAGE_WIDTH), color_mode="grayscale")
+            image = image_utils.img_to_array(image) / 255.0
+            images.append(image)
+            # images = np.expand_dims(image, axis=0)
+            # labels = []
+            if 'sleep' in file:
+                labels.append(1)
+            else:
+                labels.append(0)
 
-            # Break after collecting SEQUENCE_LENGTH samples
-            if len(X) == SEQUENCE_LENGTH:
-                break
+            if len(images) == SEQUENCE_LENGTH:
+                X.append(np.array(images))
+                y.append(labels[-1])
+                images.pop(0)
+                labels.pop(0)
+            if len(images) > SEQUENCE_LENGTH:
+                images.pop(0)
+                labels.pop(0)
+            # # Apply data augmentation to the images
+            # for x_aug, y_aug in tqdm(datagen.flow(images, labels, batch_size=1)):
+            #     X.append(x_aug)
+            #     y.append(y_aug[0])
+            #     if len(X) == SEQUENCE_LENGTH:
+            #         break
 
     X = np.array(X)
     y = np.array(y)
@@ -115,7 +133,7 @@ def load_data(images_path):
 
 
 if __name__ == "__main__":
-    setup_logging("INFO")
+    setup_logging("DEBUG")
 
     X, y = load_data("./data_new/")
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=True)
