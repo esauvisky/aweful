@@ -7,6 +7,7 @@ from keras.callbacks import EarlyStopping
 from keras.layers import (ConvLSTM2D, Dense, Dropout, Flatten, MaxPooling3D, TimeDistributed)
 from keras.models import Sequential
 from keras.preprocessing.image import image_utils
+from tqdm import tqdm
 from loguru import logger
 from sklearn.model_selection import train_test_split
 
@@ -81,7 +82,7 @@ def load_data(images_path):
     X, y = [], []
     images = []
     labels = []
-    for file in sorted(os.listdir(images_path), key=lambda x: int(x.split('.')[0].split('-')[0])):
+    for file in tqdm(list(sorted(os.listdir(images_path), key=lambda x: int(x.split('.')[0].split('-')[0])))):
         if file.endswith('.jpg'):
             logger.debug(f"Loading {file}")
             image = image_utils.load_img(os.path.join(images_path, file), keep_aspect_ratio=True, target_size=(IMAGE_HEIGHT, IMAGE_WIDTH), color_mode="grayscale")
@@ -108,7 +109,7 @@ if __name__ == "__main__":
     setup_logging("INFO")
 
     X, y = load_data("./data/")
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.5, shuffle=True)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=True)
 
     convlstm_model = create_convlstm_model()
     convlstm_model.compile(loss='binary_crossentropy', optimizer='Adam', metrics=["accuracy"])
@@ -120,15 +121,15 @@ if __name__ == "__main__":
             x=X_train,
             y=y_train,
             epochs=EPOCHS,
-            batch_size=8,
+            batch_size=4,
             validation_data=(X_test, y_test),
-            callbacks=[EarlyStopping(monitor='val_accuracy', patience=5, min_delta=0.02)],
+            callbacks=[EarlyStopping(monitor='val_accuracy', patience=3, min_delta=0.005)],
         )
         convlstm_model.save_weights(FILENAME)
 
     # predict the test set
     convlstm_model.load_weights(FILENAME)
-    convlstm_model_predictions = convlstm_model.predict(X)
+    convlstm_model_predictions = convlstm_model.predict(X_test)
     convlstm_model_predictions = (convlstm_model_predictions > 0.5).astype(int)
 
     # check and show results
@@ -136,10 +137,11 @@ if __name__ == "__main__":
     for i in range(len(convlstm_model_predictions)):
         if convlstm_model_predictions[i] != y[i]:
             logger.warning(f"This was predicted {'sleep' if convlstm_model_predictions[i] else 'not sleep'} and is actually {'sleep' if y[i] else 'not sleep'}")
-        else:
-            logger.success(f"{i+1}.jpg was predicted {'sleep' if convlstm_model_predictions[i] else 'not sleep'}!")
-        if last_result != y[i]:
-            image = image_utils.array_to_img(X[i][0])
-            image.show()
-            input()
-            last_result = y[i]
+        #     pass
+        # else:
+        #    logger.success(f"{i+1}.jpg was predicted {'sleep' if convlstm_model_predictions[i] else 'not sleep'}!")
+        # if last_result != y[i]:
+        #     image = image_utils.array_to_img(X[i][0])
+        #     image.show()
+        #     input()
+        #     last_result = y[i]
