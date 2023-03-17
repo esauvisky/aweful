@@ -109,7 +109,7 @@ def load_data(images_path, seq_length, image_height, image_width):
 
 if __name__ == "__main__":
     args = parse_args()
-    setup_logging(logger.level("DEBUG") if args.debug else logger.level("INFO"))
+    setup_logging("DEBUG" if args.debug else "INFO")
 
     # Load the data and labels
     X, y = load_data(args.data_dir, args.seq_length, args.image_height, args.image_width)
@@ -160,16 +160,14 @@ if __name__ == "__main__":
     y_pred_classes = np.round(y_pred)
 
     # Evaluate the model performance
-    print("\nConfusion matrix:")
-    print(confusion_matrix(y_val, y_pred_classes))
-    print("\nClassification report:")
-    print(classification_report(y_val, y_pred_classes))
+    logger.info("\nConfusion matrix:\n" + confusion_matrix(y_val, y_pred_classes))
+    logger.info("\nClassification report:\n" + classification_report(y_val, y_pred_classes))
 
-    model_predictions = model.predict(X_test)
+    model_predictions = model.predict(X_val)
     model_predictions = (model_predictions > 0.5).astype(int)
 
     # check and show results
     last_result = 0
     for i in range(len(model_predictions)):
-        if model_predictions[i] != y_test[i]:
-            logger.warning(f"{i} was predicted {'sleep' if model_predictions[i] else 'not sleep'} and is actually {'sleep' if y_test[i] else 'not sleep'}")
+        if model_predictions[i] != y_val[i]:
+            logger.warning(f"{i} was predicted {'sleep' if model_predictions[i] else 'not sleep'} and is actually {'sleep' if y_val[i] else 'not sleep'}")
