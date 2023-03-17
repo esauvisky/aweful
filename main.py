@@ -21,9 +21,9 @@ from keras import mixed_precision
 
 # Define default hyperparameters
 SEQUENCE_LENGTH = 15
-IMAGE_HEIGHT = 480 // 8
-IMAGE_WIDTH = 640 // 8
-BATCH_SIZE = 32
+IMAGE_HEIGHT = 480 // 10
+IMAGE_WIDTH = 640 // 10
+BATCH_SIZE = 16
 EPOCHS = 50
 LEARNING_RATE = 1e-4
 PATIENCE = 5
@@ -68,8 +68,11 @@ def create_model(input_shape):
     """Create a ConvLSTM model."""
     inputs = Input(shape=input_shape)
     x = ConvLSTM2D(filters=2, kernel_size=(3, 3), activation="tanh", recurrent_dropout=0.2, return_sequences=True)(inputs)
+    x = MaxPooling3D(pool_size=(2, 2, 2))(x)
+    x = Dropout(0.5)(x)
+    x = TimeDistributed(Flatten())(x)
     x = Flatten()(x)
-    # x = Dense(64, activation="sigmoid")(x)
+    x = Dense(64, activation="sigmoid")(x)
     outputs = Dense(1, activation="sigmoid")(x)
     out_model = Model(inputs=inputs, outputs=outputs)
     out_model.summary()
@@ -89,7 +92,6 @@ def load_data(images_path, seq_length, image_height, image_width):
             logger.debug(f"Loading {file}")
             image = image_utils.load_img(
                 os.path.join(images_path, file),
-                keep_aspect_ratio=True,
                 target_size=(image_height, image_width),
                 color_mode="grayscale",
             )
@@ -127,7 +129,6 @@ def apply_augmentation(X, n_augmentations):
 if __name__ == "__main__":
     args = parse_args()
     setup_logging("DEBUG" if args.debug else "INFO")
-    logger.info(f"Num GPUs Available: {len(tf.config.list_physical_devices('GPU'))}")
 
     # Enable mixed precision training
     policy = mixed_precision.Policy("mixed_float16")
@@ -201,6 +202,10 @@ if __name__ == "__main__":
     logger.info("\nConfusion matrix:\n" + str(confusion_matrix(y_val, y_pred_classes)))
     logger.info("\nClassification report:\n" + str(classification_report(y_val, y_pred_classes)))
 
+    # shuffle X and y
+    # permutation = np.random.permutation(X.shape[0])
+    # X = X[permutation][:5000]
+    # y = y[permutation][:5000]
     model_predictions = model.predict(X)
     model_predictions = (model_predictions > 0.5).astype(int)
 
@@ -209,3 +214,8 @@ if __name__ == "__main__":
     for i in range(len(model_predictions)):
         if model_predictions[i] != y[i]:
             logger.warning(f"{i} was predicted {'sleep' if model_predictions[i] else 'not sleep'} and is actually {'sleep' if y[i] else 'not sleep'}")
+        else:
+            logger.success(f"{i} was predicted {'sleep' if model_predictions[i] else 'not sleep'} and is actually {'sleep' if y[i] else 'not sleep'}")
+        last_result = i
+
+
