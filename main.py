@@ -148,26 +148,48 @@ def apply_augmentation(X, n_augmentations):
         X_augmented.extend(augmented_sequences)
     return np.array(X_augmented)
 
-
 class CustomBatchEndCallback(Callback):
-    def __init__(self, **kwargs):
+    def __init__(self, X_train, y_train, **kwargs):
         super().__init__(**kwargs)
-        self.step = 0
+        self.x_train = X_train
+        self.y_train = y_train
+        self.reset_test_table()
 
-    def on_batch_end(self, batch, logs=None):
-        if self.step % 20 == 0 and hasattr(self, 'peek'):
-            X_step = self.peek
-            # y_step = y_batch[0]
+    def on_train_batch_end(self, batch_ix, logs=None):
+        if batch_ix % 10 == 0:
+            # Get the images for the first timestep of the batch
+            X_step = self.x_train[batch_ix * BATCH_SIZE]
+            y_step = "Sleep" if self.y_train[batch_ix * BATCH_SIZE] == 1 else "Awake"
 
-            table = wandb.Table(columns=['ID', 'Image'])
-            for i, image in enumerate(X_step):
-                img = wandb.Image(image, caption=f"Image {i}")
-                table.add_data(i, img)
+            # create a table with the images and their labels
+            images = []
+            for sequence_ix, image in enumerate(X_step):
+                # img is the same as self.x_train[batch_ix * BATCH_SIZE + ix][0]
+                img = wandb.Image(image, caption=f"Image {batch_ix * BATCH_SIZE + sequence_ix} - Label: {y_step}")
+                images.append(img)
 
-            # Log the images to Wandb
-            logger.info("Logging images to Wandb")
-            wandb.log({"Table" : table})
-        self.step += 1
+            self.test_table.add_data(batch_ix, y_step, *images)
+            # create a wandb Artifact for each meaningful step
+            # test_data_at = wandb.Artifact("test_samples_" + str(wandb.run.id), type="predictions")
+
+            print(f"\Saving images. Last one was Sample {batch_ix * SEQUENCE_LENGTH} from batch {batch_ix} - Label: {y_step})'")
+            # log predictions table to wandb, giving it a name
+            # test_data_at.add(test_table, "predictions")
+            # wandb.run.log_artifact(test_data_at)
+        super().on_train_batch_end(batch_ix, logs)
+
+    def reset_test_table(self):
+        columns=['Index', 'Prediction']
+        for s in range(SEQUENCE_LENGTH):
+            columns.append(f'Sample {s + 1}')
+        self.test_table = wandb.Table(columns=columns)
+
+    def on_epoch_end(self, epoch_ix, logs=None):
+        wandb.log({"data": self.test_table}, commit=True)
+        self.reset_test_table()
+        super().on_epoch_end(epoch_ix, logs)
+
+
 
 def batch_generator(X, y, batch_size, callback=None):
     n_samples = len(X)
@@ -183,10 +205,12 @@ def batch_generator(X, y, batch_size, callback=None):
 
             yield X_batch, y_batch
 
+
 if __name__ == "__main__":
     args = parse_args()
     setup_logging("DEBUG" if args.debug else "INFO")
 
+    logger.info(f"Num GPUs Available: {len(tf.config.list_physical_devices('GPU'))}")
     # Enable mixed precision training
     # policy = mixed_precision.Policy("mixed_float16")
     # mixed_precision.set_global_policy(policy)
@@ -199,11 +223,11 @@ if __name__ == "__main__":
         X, y = load_data(args.data_dir, args.seq_length, args.image_height, args.image_width)
         X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, shuffle=True)
 
-        X_train_aug = apply_augmentation(X_train, n_augmentations=1)
-        y_train_aug = np.tile(y_train, 1) # Repeat the labels for the augmented sequences
+        # X_train_aug = apply_augmentation(X_train, n_augmentations=1)
+        # y_train_aug = np.tile(y_train, 1) # Repeat the labels for the augmented sequences
+        # X_train = np.concatenate((X_train, X_train_aug), axis=0)
+        # y_train = np.concatenate((y_train, y_train_aug), axis=0)
 
-        X_train = np.concatenate((X_train, X_train_aug), axis=0)
-        y_train = np.concatenate((y_train, y_train_aug), axis=0)
         os.makedirs(".data")
         np.save(".data/X.npy", X)
         np.save(".data/y.npy", y)
@@ -220,58 +244,22 @@ if __name__ == "__main__":
     optimizer = Adam(learning_rate=args.lr)
     model.compile(loss="binary_crossentropy", optimizer=optimizer, metrics=["accuracy"])
 
-    # Define the callbacks
-    # callbacks = [
-    #                                                     # WandbMetricsLogger(log_freq=5),
-    #                                                     # WandbModelCheckpoint("models"),
-    #                                                     #    CustomWandbCallback(X_val, y_val),
-    #                                                     # CustomWandbImageLoggingCallback(X_train, y_train, labels=["awake", "sleeping"], log_frequency=50),
-
-    #                                                     # CustomWandbImageLoggingCallback(
-    #                                                     #     validation_data=(X_val, y_val),
-    #                                                     #     data_table_columns=["idx", "image", "label"],
-    #                                                     #     pred_table_columns=["epoch", "idx", "image", "label", "pred"])
-    # WandbCallback(log_weights=True,
-    #               save_model=False,
-    #               training_data=(X_train, y_train),
-    #               validation_data=(X_val, y_val),
-    #               generator==lambda ndx, row: {"inputs": [wandb.Image(i) for i in row["input"]]},
-    #               input_type="auto",
-    #               output_type="label",
-    #               labels=["awake", "sleeping"],
-    #               log_batch_frequency=50),
-    #                                                     #    WandbImageLogger(log_freq=5),
-    #                                                     #    ReduceLROnPlateau(monitor="val_loss",
-    #                                                     #                      factor=0.01,
-    #                                                     #                      patience=args.patience,
-    #                                                     #                      verbose=1,
-    #                                                     #                      mode="auto",
-    #                                                     #                      min_delta=0.00005),
-    #                                                     # EarlyStopping(monitor="val_loss", patience=args.patience, verbose=1, mode="min", min_delta=0.00001)
-    # ]
-
     if os.path.exists(FILENAME):
         model.load_weights(FILENAME)
+    else:
+        # Make callbacks
+        callbacks = [
+            WandbCallback(),
+            CustomBatchEndCallback(X_train, y_train)]
 
-    # Set up CustomBatchEndCallback
-    custom_batch_end_callback = CustomBatchEndCallback()
-
-    # Create the batch generator and pass the callback
-    train_generator = batch_generator(X_train, y_train, args.batch_size, callback=custom_batch_end_callback)
-
-    callbacks = [
-        # WandbCallback(),
-        custom_batch_end_callback]
-        # CustomBatchEndCallback()]
-
-    # Train the model
-    history = model.fit(train_generator,
-    # history = model.fit(X_train, y_train,
-                        batch_size=args.batch_size,
-                        epochs=args.epochs,
-                        validation_data=(X_val, y_val),
-                        callbacks=callbacks,
-                        use_multiprocessing=True)
+        # Train the model
+        history = model.fit(X_train,
+                            y_train,
+                            batch_size=args.batch_size,
+                            epochs=args.epochs,
+                            validation_data=(X_val, y_val),
+                            callbacks=callbacks,
+                            use_multiprocessing=True)
 
     # Save the model weights
     model.save_weights(args.filename)
