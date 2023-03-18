@@ -10,7 +10,7 @@ import tensorflow as tf
 import wandb
 from keras import mixed_precision
 from keras.callbacks import EarlyStopping, ReduceLROnPlateau
-from keras.layers import (ConvLSTM2D, Dense, Dropout, Flatten, Input, MaxPooling3D, TimeDistributed)
+from keras.layers import (ConvLSTM2D, Dense, Dropout, Flatten, Input, MaxPooling3D, TimeDistributed, GlobalAveragePooling2D)
 from keras.models import Model
 from keras.optimizers import Adam
 from keras.preprocessing.image import ImageDataGenerator, image_utils
@@ -23,9 +23,9 @@ from tqdm import tqdm
 from wandb.keras import WandbMetricsLogger, WandbModelCheckpoint
 
 # Define default hyperparameters
-SEQUENCE_LENGTH = 15
-IMAGE_HEIGHT = 480 // 10
-IMAGE_WIDTH = 640 // 10
+SEQUENCE_LENGTH = 10
+IMAGE_HEIGHT = 480 // 5
+IMAGE_WIDTH = 640 // 5
 BATCH_SIZE = 16
 EPOCHS = 50
 LEARNING_RATE = 1e-4
@@ -90,10 +90,9 @@ def create_model(input_shape):
     inputs = Input(shape=input_shape)
     x = ConvLSTM2D(filters=2, kernel_size=(3, 3), activation="tanh", recurrent_dropout=0.2, return_sequences=True)(inputs)
     x = MaxPooling3D(pool_size=(2, 2, 2))(x)
-    x = Dropout(0.5)(x)
-    x = TimeDistributed(Flatten())(x)
+    x = TimeDistributed(GlobalAveragePooling2D())(x)
     x = Flatten()(x)
-    x = Dense(64, activation="sigmoid")(x)
+    x = Dense(32, activation="relu")(x)
     outputs = Dense(1, activation="sigmoid")(x)
     out_model = Model(inputs=inputs, outputs=outputs)
     out_model.summary()
@@ -172,7 +171,7 @@ class CustomBatchEndCallback(Callback):
             # create a wandb Artifact for each meaningful step
             # test_data_at = wandb.Artifact("test_samples_" + str(wandb.run.id), type="predictions")
 
-            print(f"\Saving images. Last one was Sample {batch_ix * SEQUENCE_LENGTH} from batch {batch_ix} - Label: {y_step})'")
+            print(f" Last Sample: {batch_ix * SEQUENCE_LENGTH} from batch {batch_ix} - Label: {y_step})'")
             # log predictions table to wandb, giving it a name
             # test_data_at.add(test_table, "predictions")
             # wandb.run.log_artifact(test_data_at)
@@ -221,7 +220,7 @@ if __name__ == "__main__":
         X_val, y_val = np.load(".data/X_val.npy"), np.load(".data/y_val.npy")
     else:
         X, y = load_data(args.data_dir, args.seq_length, args.image_height, args.image_width)
-        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, shuffle=True)
+        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, shuffle=False)
 
         # X_train_aug = apply_augmentation(X_train, n_augmentations=1)
         # y_train_aug = np.tile(y_train, 1) # Repeat the labels for the augmented sequences
@@ -249,7 +248,7 @@ if __name__ == "__main__":
     else:
         # Make callbacks
         callbacks = [
-            WandbCallback(),
+            # WandbCallback(),
             CustomBatchEndCallback(X_train, y_train)]
 
         # Train the model
@@ -258,8 +257,8 @@ if __name__ == "__main__":
                             batch_size=args.batch_size,
                             epochs=args.epochs,
                             validation_data=(X_val, y_val),
-                            callbacks=callbacks,
-                            use_multiprocessing=True)
+                            callbacks=callbacks)
+                            # use_multiprocessing=True)
 
     # Save the model weights
     model.save_weights(args.filename)
