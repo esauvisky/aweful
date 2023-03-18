@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
 import argparse
 import os
+import random
 import sys
 
-import random
 import keras
 import numpy as np
+import tensorflow as tf
+import wandb
+from keras import mixed_precision
 from keras.callbacks import EarlyStopping, ReduceLROnPlateau
-from keras.layers import ConvLSTM2D, Dense, Dropout, Flatten, Input, MaxPooling3D, TimeDistributed
+from keras.layers import (ConvLSTM2D, Dense, Dropout, Flatten, Input, MaxPooling3D, TimeDistributed)
 from keras.models import Model
 from keras.optimizers import Adam
 from keras.preprocessing.image import ImageDataGenerator, image_utils
 from loguru import logger
-import tensorflow as tf
 from sklearn.metrics import classification_report, confusion_matrix
+from wandb.keras import WandbCallback, WandbModelCheckpoint, WandbMetricsLogger, WandbEvalCallback
+from tensorflow.keras.callbacks import Callback
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
-
-from keras import mixed_precision
+from wandb.keras import WandbMetricsLogger, WandbModelCheckpoint
 
 # Define default hyperparameters
 SEQUENCE_LENGTH = 15
@@ -28,6 +31,24 @@ EPOCHS = 50
 LEARNING_RATE = 1e-4
 PATIENCE = 5
 FILENAME = f'weights-{SEQUENCE_LENGTH}_{IMAGE_HEIGHT}_{IMAGE_WIDTH}.h5'
+
+# start a new wandb run to track this script
+wandb.init(
+                                         # set the wandb project where this run will be logged
+    project="aweful",
+
+                                         # track hyperparameters and run metadata
+    config={
+                                         # "layer_1": 512,
+                                         # "activation_1": "relu",
+                                         # "dropout": random.uniform(0.01, 0.80),
+                                         # "layer_2": 1,
+                                         # "activation_2": "sigmoid",
+        "optimizer": "adam",
+        "loss": "binary_crossentropy",
+        "metric": "accuracy",
+        "epoch": EPOCHS,
+        "batch_size": BATCH_SIZE})
 
 
 def parse_args():
@@ -121,18 +142,54 @@ def apply_augmentation(X, n_augmentations):
         images = X[i]
         seed = random.randint(0, 1000)
         augmented_sequences = [
-            np.stack([datagen.random_transform(image, seed=seed) for image in images], axis=0) for _ in range(n_augmentations)]
+            np.stack([datagen.random_transform(image, seed=seed)
+                      for image in images], axis=0)
+            for _ in range(n_augmentations)]
         X_augmented.extend(augmented_sequences)
     return np.array(X_augmented)
 
+
+class CustomBatchEndCallback(Callback):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.step = 0
+
+    def on_batch_end(self, batch, logs=None):
+        if self.step % 20 == 0 and hasattr(self, 'peek'):
+            X_step = self.peek
+            # y_step = y_batch[0]
+
+            table = wandb.Table(columns=['ID', 'Image'])
+            for i, image in enumerate(X_step):
+                img = wandb.Image(image, caption=f"Image {i}")
+                table.add_data(i, img)
+
+            # Log the images to Wandb
+            logger.info("Logging images to Wandb")
+            wandb.log({"Table" : table})
+        self.step += 1
+
+def batch_generator(X, y, batch_size, callback=None):
+    n_samples = len(X)
+    indices = np.arange(n_samples)
+
+    while True:
+        for start in range(0, n_samples, batch_size):
+            end = min(start + batch_size, n_samples)
+            X_batch, y_batch = X[indices[start:end]], y[indices[start:end]]
+
+            if callback is not None:
+                callback.peek = X_batch[0]
+
+            yield X_batch, y_batch
 
 if __name__ == "__main__":
     args = parse_args()
     setup_logging("DEBUG" if args.debug else "INFO")
 
     # Enable mixed precision training
-    policy = mixed_precision.Policy("mixed_float16")
-    mixed_precision.set_global_policy(policy)
+    # policy = mixed_precision.Policy("mixed_float16")
+    # mixed_precision.set_global_policy(policy)
 
     if os.path.exists(".data"):
         X, y = np.load(".data/X.npy"), np.load(".data/y.npy")
@@ -164,31 +221,62 @@ if __name__ == "__main__":
     model.compile(loss="binary_crossentropy", optimizer=optimizer, metrics=["accuracy"])
 
     # Define the callbacks
-    callbacks = [
-                   # ReduceLROnPlateau(monitor="val_loss",
-                   #                   factor=0.01,
-                   #                   patience=args.patience,
-                   #                   verbose=1,
-                   #                   mode="auto",
-                   #                   min_delta=0.00005),
-                   # EarlyStopping(monitor="val_loss", patience=args.patience, verbose=1, mode="min", min_delta=0.00001)
-    ]
+    # callbacks = [
+    #                                                     # WandbMetricsLogger(log_freq=5),
+    #                                                     # WandbModelCheckpoint("models"),
+    #                                                     #    CustomWandbCallback(X_val, y_val),
+    #                                                     # CustomWandbImageLoggingCallback(X_train, y_train, labels=["awake", "sleeping"], log_frequency=50),
+
+    #                                                     # CustomWandbImageLoggingCallback(
+    #                                                     #     validation_data=(X_val, y_val),
+    #                                                     #     data_table_columns=["idx", "image", "label"],
+    #                                                     #     pred_table_columns=["epoch", "idx", "image", "label", "pred"])
+    # WandbCallback(log_weights=True,
+    #               save_model=False,
+    #               training_data=(X_train, y_train),
+    #               validation_data=(X_val, y_val),
+    #               generator==lambda ndx, row: {"inputs": [wandb.Image(i) for i in row["input"]]},
+    #               input_type="auto",
+    #               output_type="label",
+    #               labels=["awake", "sleeping"],
+    #               log_batch_frequency=50),
+    #                                                     #    WandbImageLogger(log_freq=5),
+    #                                                     #    ReduceLROnPlateau(monitor="val_loss",
+    #                                                     #                      factor=0.01,
+    #                                                     #                      patience=args.patience,
+    #                                                     #                      verbose=1,
+    #                                                     #                      mode="auto",
+    #                                                     #                      min_delta=0.00005),
+    #                                                     # EarlyStopping(monitor="val_loss", patience=args.patience, verbose=1, mode="min", min_delta=0.00001)
+    # ]
 
     if os.path.exists(FILENAME):
         model.load_weights(FILENAME)
 
+    # Set up CustomBatchEndCallback
+    custom_batch_end_callback = CustomBatchEndCallback()
+
+    # Create the batch generator and pass the callback
+    train_generator = batch_generator(X_train, y_train, args.batch_size, callback=custom_batch_end_callback)
+
+    callbacks = [
+        # WandbCallback(),
+        custom_batch_end_callback]
+        # CustomBatchEndCallback()]
+
     # Train the model
-    history = model.fit(
-        X_train,
-        y_train,
-        batch_size=args.batch_size,
-        epochs=args.epochs,
-        validation_data=(X_val, y_val),
-        callbacks=callbacks,
-    )
+    history = model.fit(train_generator,
+    # history = model.fit(X_train, y_train,
+                        batch_size=args.batch_size,
+                        epochs=args.epochs,
+                        validation_data=(X_val, y_val),
+                        callbacks=callbacks,
+                        use_multiprocessing=True)
 
     # Save the model weights
     model.save_weights(args.filename)
+
+    wandb.finish()
 
     # Evaluate the model on the test set
     loss, acc = model.evaluate(X_val, y_val, verbose=0)
@@ -217,5 +305,3 @@ if __name__ == "__main__":
         else:
             logger.success(f"{i} was predicted {'sleep' if model_predictions[i] else 'not sleep'} and is actually {'sleep' if y[i] else 'not sleep'}")
         last_result = i
-
-
