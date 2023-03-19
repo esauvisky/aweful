@@ -108,11 +108,15 @@ def load_data(images_path, seq_length, image_height, image_width):
     X, y = [], []
     images = []
     labels = []
+    X_aug = []
+    y_aug = []
     datagen = ImageDataGenerator(width_shift_range=0.2, height_shift_range=0.2, zoom_range=0.2)
 
     for file in tqdm(
-            sorted(os.listdir(images_path), key=lambda x: int(x.split(".")[0].split("-")[0]))[:100],
+            sorted(os.listdir(images_path), key=lambda x: int(x.split(".")[0].split("-")[0])),
             total=len(os.listdir(images_path)),
+                                                                                               # sorted(os.listdir(images_path), key=lambda x: int(x.split(".")[0].split("-")[0]))[4000:4500],
+                                                                                               # total=500,
     ):
         if file.endswith(".jpg"):
             logger.debug(f"Loading {file}")
@@ -133,12 +137,14 @@ def load_data(images_path, seq_length, image_height, image_width):
 
             # Augmentation
             augmented_images = []
+            seed = random.randint(0, 1000)
             for image in images:
-                for _ in range(1): # Number of augmentations per image
-                    transformed = datagen.random_transform(image)
-                    augmented_images.append(transformed)
-            X.append(np.array(augmented_images))
-            y.append(labels[-1])
+                # for _ in range(1):
+                transformed = datagen.random_transform(image, seed=seed)
+                augmented_images.append(transformed)
+
+            X_aug.append(np.array(augmented_images))
+            y_aug.append(labels[-1])
 
             images.pop(0)
             labels.pop(0)
@@ -148,16 +154,11 @@ def load_data(images_path, seq_length, image_height, image_width):
             labels.pop(0)
     X = np.array(X)
     y = np.array(y)
+    X_aug = np.array(X_aug)
+    y_aug = np.array(y_aug)
+    X = np.concatenate((X, X_aug), axis=0)
+    y = np.concatenate((y, y_aug), axis=0)
     return X, y
-
-
-def shuffle_with_indices(X, y):
-    assert len(X) == len(y)
-    indices = np.arange(len(X))
-    np.random.shuffle(indices)
-    X_shuffled = X[indices]
-    y_shuffled = y[indices]
-    return X_shuffled, y_shuffled, indices
 
 
 def load_and_split_data():
@@ -167,6 +168,7 @@ def load_and_split_data():
             for name in ["X", "y", "X_train", "y_train", "X_val", "y_val", "shuffled_indices"]}
     else:
         data = prepare_data()
+        # os.system("rm .data -r")
         os.makedirs(".data")
         for name, array in data.items():
             pickle.dump(array, open(f".data/{name}.npy", "wb"))
@@ -177,19 +179,17 @@ def prepare_data():
     X, y = load_data("./data", SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH)
     X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, shuffle=False)
     new_indices = np.random.permutation(len(X_train)).tolist()
-    X_train, y_train = [X_train[i] for i in new_indices], [y_train[i] for i in new_indices]
-    # X_train, y_train, new_indices = shuffle_with_indices(X_train, y_train)
+    X_train, y_train = np.array([X_train[i] for i in new_indices]), np.array([y_train[i] for i in new_indices])
     return {
-        "X": np.array(X), "y": np.array(y), "X_train": np.array(X_train), "y_train": np.array(y_train),
-        "X_val": np.array(X_val), "y_val": np.array(y_val), "shuffled_indices": new_indices}
+        "X": X, "y": y, "X_train": X_train, "y_train": y_train, "X_val": X_val, "y_val": y_val, "shuffled_indices": new_indices}
 
 
 setup_logging("DEBUG" if DEBUG else "INFO")
 
 logger.info(f"Num GPUs Available: {len(tf.config.list_physical_devices('GPU'))}")
 # Enable mixed precision training
-policy = mixed_precision.Policy("mixed_float16")
-mixed_precision.set_global_policy(policy)
+# policy = mixed_precision.Policy("mixed_float16")
+# mixed_precision.set_global_policy(policy)
 
 # start a new wandb run to track this script
 wandb.init(project="aweful",
@@ -200,7 +200,10 @@ wandb.init(project="aweful",
                "epoch": EPOCHS,
                "batch_size": BATCH_SIZE,})
 
-X, y, X_train, y_train, X_val, y_val, shuffled_indices = load_and_split_data().values()
+d = load_and_split_data()
+X, y, X_train, y_train = d["X"], d["y"], d["X_train"], d["y_train"]
+X_val, y_val = d["X_val"], d["y_val"]
+shuffled_indices = d["shuffled_indices"]
 
 # Create the ConvLSTM model
 input_shape = (SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1)
@@ -210,9 +213,7 @@ model = create_model(input_shape)
 optimizer = Adam(learning_rate=LEARNING_RATE)
 model.compile(loss="binary_crossentropy", optimizer=optimizer, metrics=["accuracy"])
 
-callbacks = [
-    CustomBatchEndCallback(X_train, y_train),
-    WandbCallback(save_model=True),]
+callbacks = [CustomBatchEndCallback(X_train, y_train), WandbCallback(save_model=True)]
 
 model.fit(
     X_train,
@@ -225,17 +226,7 @@ model.fit(
 # Save the model weights
 model.save_weights(FILENAME)
 
-    wandb.finish()
-    wandb.finish()
-    wandb.finish()
-
 wandb.finish()
-
-wandb.finish()
-    wandb.finish()
-
-wandb.finish()
-
 # Evaluate the model on the test set
 loss, acc = model.evaluate(X_val, y_val, verbose=0)
 logger.info(f"Validation accuracy: {acc:.4f}, loss: {loss:.4f}")
