@@ -61,7 +61,6 @@ def create_model(input_shape):
     return out_model
 
 
-
 class CustomBatchEndCallback(Callback):
     def __init__(self, X_train, y_train, **kwargs):
         super().__init__(**kwargs)
@@ -78,7 +77,7 @@ class CustomBatchEndCallback(Callback):
             # create a table with the images and their labels
             images = []
             for sequence_ix, image in enumerate(X_step):
-                self.x_train[shuffled_indices[batch_ix * BATCH_SIZE] + ix][0]
+                self.x_train[shuffled_indices[batch_ix * BATCH_SIZE] + sequence_ix][0]
                 img = wandb.Image(image,
                                   caption=f"Image {shuffled_indices[batch_ix * BATCH_SIZE] + sequence_ix} - Label: {y_step}")
                 images.append(img)
@@ -103,6 +102,7 @@ class CustomBatchEndCallback(Callback):
         wandb.log({"data": self.test_table}, commit=True)
         self.reset_test_table()
         super().on_epoch_end(epoch_ix, logs)
+
 
 def load_data(images_path, seq_length, image_height, image_width):
     X, y = [], []
@@ -130,24 +130,26 @@ def load_data(images_path, seq_length, image_height, image_width):
         if len(images) == seq_length:
             X.append(np.array(images))
             y.append(labels[-1])
-            images.pop(0)
-            labels.pop(0)
 
             # Augmentation
             augmented_images = []
             for image in images:
-                for _ in range(1):  # Number of augmentations per image
+                for _ in range(1): # Number of augmentations per image
                     transformed = datagen.random_transform(image)
                     augmented_images.append(transformed)
             X.append(np.array(augmented_images))
             y.append(labels[-1])
 
+            images.pop(0)
+            labels.pop(0)
+
         if len(images) > seq_length:
             images.pop(0)
             labels.pop(0)
-    # X = np.array(X)
-    # y = np.array(y)
+    X = np.array(X)
+    y = np.array(y)
     return X, y
+
 
 def shuffle_with_indices(X, y):
     assert len(X) == len(y)
@@ -156,6 +158,7 @@ def shuffle_with_indices(X, y):
     X_shuffled = X[indices]
     y_shuffled = y[indices]
     return X_shuffled, y_shuffled, indices
+
 
 def load_and_split_data():
     if os.path.exists(".data"):
@@ -169,13 +172,17 @@ def load_and_split_data():
             pickle.dump(array, open(f".data/{name}.npy", "wb"))
     return data
 
+
 def prepare_data():
     X, y = load_data("./data", SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH)
     X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, shuffle=False)
-    new_indices = np.random.permutation(len(X_train))
-    X_train, y_train = X_train[new_indices], y_train[new_indices]
+    new_indices = np.random.permutation(len(X_train)).tolist()
+    X_train, y_train = [X_train[i] for i in new_indices], [y_train[i] for i in new_indices]
+    # X_train, y_train, new_indices = shuffle_with_indices(X_train, y_train)
     return {
-        "X": X, "y": y, "X_train": X_train, "y_train": y_train, "X_val": X_val, "y_val": y_val, "shuffled_indices": new_indices}
+        "X": np.array(X), "y": np.array(y), "X_train": np.array(X_train), "y_train": np.array(y_train),
+        "X_val": np.array(X_val), "y_val": np.array(y_val), "shuffled_indices": new_indices}
+
 
 setup_logging("DEBUG" if DEBUG else "INFO")
 
@@ -186,8 +193,12 @@ mixed_precision.set_global_policy(policy)
 
 # start a new wandb run to track this script
 wandb.init(project="aweful",
-        config={
-        "optimizer": "adam", "loss": "binary_crossentropy", "metric": "accuracy", "epoch": EPOCHS, "batch_size": BATCH_SIZE})
+           config={
+               "optimizer": "adam",
+               "loss": "binary_crossentropy",
+               "metric": "accuracy",
+               "epoch": EPOCHS,
+               "batch_size": BATCH_SIZE,})
 
 X, y, X_train, y_train, X_val, y_val, shuffled_indices = load_and_split_data().values()
 
@@ -199,20 +210,28 @@ model = create_model(input_shape)
 optimizer = Adam(learning_rate=LEARNING_RATE)
 model.compile(loss="binary_crossentropy", optimizer=optimizer, metrics=["accuracy"])
 
-callbacks = [CustomBatchEndCallback(X_train, y_train), WandbCallback(save_model=True)]
+callbacks = [
+    CustomBatchEndCallback(X_train, y_train),
+    WandbCallback(save_model=True),]
 
-model.fit(X_train,
-        y_train,
-        epochs=EPOCHS,
-        batch_size=BATCH_SIZE,
-        validation_data=(X_val, y_val),
-        callbacks=callbacks,
-        use_multiprocessing=True,
-        workers=4)
+model.fit(
+    X_train,
+    y_train,
+    epochs=EPOCHS,
+    batch_size=BATCH_SIZE,
+    validation_data=(X_val, y_val),
+    callbacks=callbacks,
+)
 # Save the model weights
 model.save_weights(FILENAME)
 
     wandb.finish()
+    wandb.finish()
+    wandb.finish()
+
+wandb.finish()
+
+wandb.finish()
     wandb.finish()
 
 wandb.finish()
