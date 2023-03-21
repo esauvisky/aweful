@@ -53,8 +53,10 @@ def setup_logging(level="DEBUG", show_module=False):
 def create_model(input_shape):
     """Create a ConvLSTM model."""
     inputs = Input(shape=input_shape)
+    x = ConvLSTM2D(filters=4, kernel_size=(3, 3), activation="tanh", recurrent_dropout=0.2, return_sequences=True)(inputs)
+    x = MaxPooling3D(pool_size=(2, 2, 2))(x)
     x = ConvLSTM2D(filters=2, kernel_size=(3, 3), activation="tanh", recurrent_dropout=0.2, return_sequences=True)(inputs)
-    # x = MaxPooling3D(pool_size=(2, 2, 2))(x)
+    x = MaxPooling3D(pool_size=(2, 2, 2))(x)
     # x = TimeDistributed(GlobalAveragePooling2D())(x)
     x = Flatten()(x)
     x = Dense(4, activation="relu")(x)
@@ -65,31 +67,29 @@ def create_model(input_shape):
 
 
 class CustomBatchEndCallback(Callback):
-    def __init__(self, X_train, y_train, **kwargs):
+    def __init__(self, X, y, **kwargs):
         super().__init__(**kwargs)
-        self.x_train = X_train
-        self.y_train = y_train
+        self.X = X
+        self.y = y
         self.reset_test_table()
 
     def on_train_batch_end(self, batch_ix, logs=None):
         if batch_ix % 10 == 0:
             # Get the X value (array of images) for the first sample in the batch
-            X_step = self.x_train[batch_ix * BATCH_SIZE]
-            y_step = "Sleep" if self.y_train[batch_ix * BATCH_SIZE] == 1 else "Awake"
+            X_step = self.X[batch_ix * BATCH_SIZE]
+            y_step = "Sleep" if self.y[batch_ix * BATCH_SIZE] == 1 else "Awake"
 
             # create a table with each image of the sequence
             images = []
             for sequence_ix, image in enumerate(X_step):
                 # image is the same as self.x_train[batch_ix * BATCH_SIZE + ix][0]
-                image = self.x_train[indices[batch_ix * BATCH_SIZE + sequence_ix]][0]
-                img = wandb.Image(image,
-                                  caption=f"Image {indices[batch_ix * BATCH_SIZE] + sequence_ix} - Label: {y_step}")
+                img = wandb.Image(image, caption=f"Image {batch_ix*BATCH_SIZE + sequence_ix} - Label: {y_step}")
                 images.append(img)
 
             # Adds the row to the table with the actual index of the first image of the sequence,
             # the original label y, and the images
-            self.test_table.add_data(indices[batch_ix * BATCH_SIZE], y_step, *images)
-            print(f" | Samples {indices[batch_ix * BATCH_SIZE]}-{indices[batch_ix * BATCH_SIZE] + SEQUENCE_LENGTH - 1} - Label: {y_step})'")
+            self.test_table.add_data(batch_ix * BATCH_SIZE, y_step, *images)
+            print(f" | Samples {batch_ix*BATCH_SIZE}-{batch_ix*BATCH_SIZE + SEQUENCE_LENGTH - 1} - Label: {y_step})'")
 
         super().on_train_batch_end(batch_ix, logs)
 
@@ -111,12 +111,12 @@ def load_data(images_path, seq_length, image_height, image_width):
     labels = []
     X_aug = []
     y_aug = []
-    datagen = ImageDataGenerator(width_shift_range=0.2, height_shift_range=0.2, zoom_range=0.2)
+    datagen = ImageDataGenerator(width_shift_range=0.2, height_shift_range=0.2, brightness_range=[0.8, 1.2])
 
-    for file in tqdm(
-            # sorted(os.listdir(images_path), key=lambda x: int(x.split(".")[0].split("-")[0])), total=len(os.listdir(images_path)),
-            sorted(os.listdir(images_path), key=lambda x: int(x.split(".")[0].split("-")[0]))[4000:4500], total=500,
-    ): # yapf: disable
+    for file in tqdm(sorted(os.listdir(images_path), key=lambda x: int(x.split(".")[0].split("-")[0])), total=len(os.listdir(images_path))): # yapf: disable
+        if len(X) % 100 == 0:
+            logger.info(f"Loaded {len(X)} samples. Restarting augmentation seed.")
+            seed = random.randint(0, 1000)
         if file.endswith(".jpg"):
             logger.debug(f"Loading {file}")
             image = image_utils.load_img(
@@ -136,7 +136,6 @@ def load_data(images_path, seq_length, image_height, image_width):
 
             # Augmentation
             augmented_images = []
-            seed = random.randint(0, 1000)
             for image in images:
                 # for _ in range(1):
                 transformed = datagen.random_transform(image, seed=seed)
@@ -161,10 +160,18 @@ def load_data(images_path, seq_length, image_height, image_width):
 
 
 def prepare_data():
-    X, y = load_data("./data", SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH)
-    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, shuffle=True, random_state=42)
-    _indices = shuffle(range(len(X_train)), random_state=42)
-    return {"X": X, "y": y, "X_train": X_train, "y_train": y_train, "X_val": X_val, "y_val": y_val, "indices": _indices}
+    X, y = load_data("./data_slim", SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH)
+    # _indices = shuffle(range(len(X)), random_state=41)
+    # X_train, y_train = shuffle(X, y, random_state=41)
+    # X_val, y_val = shuffle(X, y, random_state=41)
+    indices = np.random.permutation(len(X)).tolist()
+    X_train, y_train = X[indices], y[indices]
+    X_val, y_val = X[indices], y[indices]
+    X_train = X_train[:int(len(X) * 0.8)]
+    y_train = y_train[:int(len(y) * 0.8)]
+    X_val = X_val[int(len(X) * 0.8):]
+    y_val = y_val[int(len(y) * 0.8):]
+    return {"X": X, "y": y, "X_train": X_train, "y_train": y_train, "X_val": X_val, "y_val": y_val, "indices": indices}
 
 
 def load_and_split_data():
@@ -208,16 +215,24 @@ model = create_model(input_shape)
 optimizer = Adam(learning_rate=LEARNING_RATE)
 model.compile(loss="binary_crossentropy", optimizer=optimizer, metrics=["accuracy"])
 
-callbacks = [CustomBatchEndCallback(X_train, y_train), WandbCallback(save_model=True),] #EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True)]
+callbacks = [
+    CustomBatchEndCallback(X_train, y_train),
+    WandbCallback(save_model=True),
+    EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True)]
 
 with tf.device("CPU"):
-    train = tf.data.Dataset.from_tensor_slices((X_train, y_train)).batch(BATCH_SIZE, drop_remainder=True, num_parallel_calls=tf.data.experimental.AUTOTUNE).prefetch(tf.data.experimental.AUTOTUNE)
+    train = tf.data.Dataset.from_tensor_slices((X_train, y_train)).batch(BATCH_SIZE,
+                                                                         drop_remainder=True,
+                                                                         num_parallel_calls=tf.data.experimental.AUTOTUNE).prefetch(tf.data.experimental.AUTOTUNE)
+    val = tf.data.Dataset.from_tensor_slices((X_val, y_val)).batch(BATCH_SIZE,
+                                                                   drop_remainder=True,
+                                                                   num_parallel_calls=tf.data.experimental.AUTOTUNE).prefetch(tf.data.experimental.AUTOTUNE)
 
 model.fit(
     train,
     epochs=EPOCHS,
     batch_size=BATCH_SIZE,
-    validation_data=(X_val, y_val),
+    validation_data=val,
     callbacks=callbacks,
 )
 
@@ -226,7 +241,7 @@ model.save_weights(FILENAME)
 # model.load_weights(FILENAME)
 
 # Evaluate the model on the test set
-loss, acc = model.evaluate(X_val, y_val, verbose=2)
+loss, acc = model.evaluate(val, verbose=2)
 logger.info(f"Validation accuracy: {acc:.4f}, loss: {loss:.4f}")
 
 # Make predictions on the test set
