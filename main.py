@@ -215,21 +215,26 @@ model.compile(loss="binary_crossentropy", optimizer=optimizer, metrics=["accurac
 
 callbacks = [CustomBatchEndCallback(X_train, y_train), WandbCallback(save_model=True)]
 
+with tf.device("CPU"):
+    train = Dataset.from_tensor_slices((X_train, y_train)).shuffle(4*128).batch(BATCH_SIZE)
+    validate = Dataset.from_tensor_slices((X_val, y_val)).batch(BATCH_SIZE)
+
 model.fit(
-    X_train,
-    y_train,
+    train,
     epochs=EPOCHS,
     batch_size=BATCH_SIZE,
-    validation_data=(X_val, y_val),
+    validation_data=validate,
     callbacks=callbacks,
 )
+
 # Save the model weights
 model.save_weights(FILENAME)
+# model.load_weights(FILENAME)
 
-wandb.finish()
 # Evaluate the model on the test set
-loss, acc = model.evaluate(X_val, y_val, verbose=0)
+loss, acc = model.evaluate(validate, verbose=0)
 logger.info(f"Validation accuracy: {acc:.4f}, loss: {loss:.4f}")
+
 
 # Make predictions on the test set
 y_pred = model.predict(X_val)
@@ -239,18 +244,22 @@ y_pred_classes = np.round(y_pred)
 logger.info("\nConfusion matrix:\n" + str(confusion_matrix(y_val, y_pred_classes)))
 logger.info("\nClassification report:\n" + str(classification_report(y_val, y_pred_classes)))
 
-# shuffle X and y
-# permutation = np.random.permutation(X.shape[0])
-# X = X[permutation][:5000]
-# y = y[permutation][:5000]
-model_predictions = model.predict(X)
+
+# Predict on the entire dataset to look for patterns
+with tf.device("CPU"):
+    X_predict = Dataset.from_tensor_slices(X).batch(BATCH_SIZE)
+
+model_predictions = model.predict(X_predict)
 model_predictions = (model_predictions > 0.5).astype(int)
 
 # check and show results
-last_result = 0
-for i in range(len(model_predictions)):
-    if model_predictions[i] != y[i]:
-        logger.warning(f"{i} was predicted {'sleep' if model_predictions[i] else 'not sleep'} and is actually {'sleep' if y[i] else 'not sleep'}")
+
+i = 0
+for i, (prediction, actual) in enumerate(zip(model_predictions, y)):
+    if prediction != actual:
+        logger.warning(f"{i} PRED: {'sleep\t' if prediction else 'not sleep\t'} ACTUAL: {'sleep\t' if actual else 'not sleep\t'}")
     else:
-        logger.success(f"{i} was predicted {'sleep' if model_predictions[i] else 'not sleep'} and is actually {'sleep' if y[i] else 'not sleep'}")
-    last_result = i
+        logger.success(f"{i} {'sleep\t' if prediction else 'not sleep\t'}")
+    i += 1
+
+wandb.finish()
