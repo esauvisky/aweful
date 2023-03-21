@@ -9,6 +9,7 @@ import numpy as np
 import tensorflow as tf
 import wandb
 from keras import mixed_precision
+from tensorflow.data import Dataset
 from keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from keras.layers import (ConvLSTM2D, Dense, Dropout, Flatten, Input, MaxPooling3D, TimeDistributed, GlobalAveragePooling2D)
 from keras.models import Model
@@ -52,7 +53,7 @@ def create_model(input_shape):
     inputs = Input(shape=input_shape)
     x = ConvLSTM2D(filters=2, kernel_size=(3, 3), activation="tanh", recurrent_dropout=0.2, return_sequences=True)(inputs)
     # x = MaxPooling3D(pool_size=(2, 2, 2))(x)
-    x = TimeDistributed(GlobalAveragePooling2D())(x)
+    # x = TimeDistributed(GlobalAveragePooling2D())(x)
     x = Flatten()(x)
     x = Dense(8, activation="relu")(x)
     outputs = Dense(1, activation="sigmoid")(x)
@@ -70,26 +71,23 @@ class CustomBatchEndCallback(Callback):
 
     def on_train_batch_end(self, batch_ix, logs=None):
         if batch_ix % 10 == 0:
-            # Get the images for the first timestep of the batch
-            X_step = self.x_train[shuffled_indices[batch_ix * BATCH_SIZE]]
-            y_step = "Sleep" if self.y_train[shuffled_indices[batch_ix * BATCH_SIZE]] == 1 else "Awake"
+            # Get the X value (array of images) for the first sample in the batch
+            X_step = self.x_train[batch_ix * BATCH_SIZE]
+            y_step = "Sleep" if self.y_train[batch_ix * BATCH_SIZE] == 1 else "Awake"
 
-            # create a table with the images and their labels
+            # create a table with each image of the sequence
             images = []
             for sequence_ix, image in enumerate(X_step):
-                self.x_train[shuffled_indices[batch_ix * BATCH_SIZE] + sequence_ix][0]
+                image = self.x_train[indices[batch_ix * BATCH_SIZE]][sequence_ix]
                 img = wandb.Image(image,
-                                  caption=f"Image {shuffled_indices[batch_ix * BATCH_SIZE] + sequence_ix} - Label: {y_step}")
+                                  caption=f"Image {indices[batch_ix * BATCH_SIZE] + sequence_ix} - Label: {y_step}")
                 images.append(img)
 
-            self.test_table.add_data(batch_ix, y_step, *images)
-            # create a wandb Artifact for each meaningful step
-            # test_data_at = wandb.Artifact("test_samples_" + str(wandb.run.id), type="predictions")
+            # Adds the row to the table with the actual index of the first image of the sequence,
+            # the original label y, and the images
+            self.test_table.add_data(indices[batch_ix * BATCH_SIZE], y_step, *images)
+            print(f" | Samples {indices[batch_ix * BATCH_SIZE]}-{indices[batch_ix * BATCH_SIZE] + SEQUENCE_LENGTH - 1} - Label: {y_step})'")
 
-            print(f" Last Sample:  from batch {batch_ix} - Label: {y_step})'")
-            # log predictions table to wandb, giving it a name
-            # test_data_at.add(test_table, "predictions")
-            # wandb.run.log_artifact(test_data_at)
         super().on_train_batch_end(batch_ix, logs)
 
     def reset_test_table(self):
@@ -160,32 +158,31 @@ def load_data(images_path, seq_length, image_height, image_width):
     y = np.concatenate((y, y_aug), axis=0)
     return X, y
 
+def prepare_data():
+    X, y = load_data("./data", SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH)
+    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, shuffle=False)
+    # indices = np.random.permutation(len(X_train)).tolist()
+    indices = list(range(len(X_train)))
+    # X_train, y_train = np.array([X_train[i] for i in indices]), np.array([y_train[i] for i in indices])
+    return {
+        "X": X, "y": y, "X_train": X_train, "y_train": y_train, "X_val": X_val, "y_val": y_val, "indices": indices}
+
 
 def load_and_split_data():
     if os.path.exists(".data"):
         data = {
-            name: pickle.load(open(f".data/{name}.npy", "rb"))
-            for name in ["X", "y", "X_train", "y_train", "X_val", "y_val", "shuffled_indices"]}
+            name: np.load(f".data/{name}.npy")
+            for name in ["X", "y", "X_train", "y_train", "X_val", "y_val", "indices"]}
     else:
         data = prepare_data()
-        # os.system("rm .data -r")
-        os.makedirs(".data")
+        os.makedirs(".data", exist_ok=True)
         for name, array in data.items():
-            pickle.dump(array, open(f".data/{name}.npy", "wb"))
+            np.save(f".data/{name}.npy", array)
     return data
 
 
-def prepare_data():
-    X, y = load_data("./data", SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH)
-    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, shuffle=False)
-    new_indices = np.random.permutation(len(X_train)).tolist()
-    X_train, y_train = np.array([X_train[i] for i in new_indices]), np.array([y_train[i] for i in new_indices])
-    return {
-        "X": X, "y": y, "X_train": X_train, "y_train": y_train, "X_val": X_val, "y_val": y_val, "shuffled_indices": new_indices}
-
 
 setup_logging("DEBUG" if DEBUG else "INFO")
-
 logger.info(f"Num GPUs Available: {len(tf.config.list_physical_devices('GPU'))}")
 # Enable mixed precision training
 # policy = mixed_precision.Policy("mixed_float16")
@@ -203,7 +200,7 @@ wandb.init(project="aweful",
 d = load_and_split_data()
 X, y, X_train, y_train = d["X"], d["y"], d["X_train"], d["y_train"]
 X_val, y_val = d["X_val"], d["y_val"]
-shuffled_indices = d["shuffled_indices"]
+indices = d["indices"]
 
 # Create the ConvLSTM model
 input_shape = (SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1)
@@ -216,7 +213,7 @@ model.compile(loss="binary_crossentropy", optimizer=optimizer, metrics=["accurac
 callbacks = [CustomBatchEndCallback(X_train, y_train), WandbCallback(save_model=True)]
 
 with tf.device("CPU"):
-    train = Dataset.from_tensor_slices((X_train, y_train)).shuffle(4*128).batch(BATCH_SIZE)
+    train = Dataset.from_tensor_slices((X_train, y_train)).batch(BATCH_SIZE)
     validate = Dataset.from_tensor_slices((X_val, y_val)).batch(BATCH_SIZE)
 
 model.fit(
@@ -257,9 +254,9 @@ model_predictions = (model_predictions > 0.5).astype(int)
 i = 0
 for i, (prediction, actual) in enumerate(zip(model_predictions, y)):
     if prediction != actual:
-        logger.warning(f"{i} PRED: {'sleep\t' if prediction else 'not sleep\t'} ACTUAL: {'sleep\t' if actual else 'not sleep\t'}")
+        logger.warning(f"{i} PRED: {'sleep' if prediction else 'not sleep'}\t ACTUAL: {'sleep' if actual else 'not sleep'}")
     else:
-        logger.success(f"{i} {'sleep\t' if prediction else 'not sleep\t'}")
+        logger.success(f"{i} {'sleep' if prediction else 'not sleep'}")
     i += 1
 
 wandb.finish()
