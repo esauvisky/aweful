@@ -20,6 +20,8 @@ from sklearn.metrics import classification_report, confusion_matrix
 from wandb.keras import WandbCallback, WandbModelCheckpoint, WandbMetricsLogger, WandbEvalCallback
 from keras.callbacks import Callback
 from sklearn.model_selection import train_test_split
+from sklearn.utils import shuffle
+
 from tqdm import tqdm
 import pickle
 from wandb.keras import WandbMetricsLogger, WandbModelCheckpoint
@@ -55,7 +57,7 @@ def create_model(input_shape):
     # x = MaxPooling3D(pool_size=(2, 2, 2))(x)
     # x = TimeDistributed(GlobalAveragePooling2D())(x)
     x = Flatten()(x)
-    x = Dense(8, activation="relu")(x)
+    x = Dense(4, activation="relu")(x)
     outputs = Dense(1, activation="sigmoid")(x)
     out_model = Model(inputs=inputs, outputs=outputs)
     out_model.summary()
@@ -78,7 +80,8 @@ class CustomBatchEndCallback(Callback):
             # create a table with each image of the sequence
             images = []
             for sequence_ix, image in enumerate(X_step):
-                image = self.x_train[indices[batch_ix * BATCH_SIZE]][sequence_ix]
+                # image is the same as self.x_train[batch_ix * BATCH_SIZE + ix][0]
+                image = self.x_train[indices[batch_ix * BATCH_SIZE + sequence_ix]][0]
                 img = wandb.Image(image,
                                   caption=f"Image {indices[batch_ix * BATCH_SIZE] + sequence_ix} - Label: {y_step}")
                 images.append(img)
@@ -111,11 +114,9 @@ def load_data(images_path, seq_length, image_height, image_width):
     datagen = ImageDataGenerator(width_shift_range=0.2, height_shift_range=0.2, zoom_range=0.2)
 
     for file in tqdm(
-            sorted(os.listdir(images_path), key=lambda x: int(x.split(".")[0].split("-")[0])),
-            total=len(os.listdir(images_path)),
-                                                                                               # sorted(os.listdir(images_path), key=lambda x: int(x.split(".")[0].split("-")[0]))[4000:4500],
-                                                                                               # total=500,
-    ):
+            # sorted(os.listdir(images_path), key=lambda x: int(x.split(".")[0].split("-")[0])), total=len(os.listdir(images_path)),
+            sorted(os.listdir(images_path), key=lambda x: int(x.split(".")[0].split("-")[0]))[4000:4500], total=500,
+    ): # yapf: disable
         if file.endswith(".jpg"):
             logger.debug(f"Loading {file}")
             image = image_utils.load_img(
@@ -158,14 +159,12 @@ def load_data(images_path, seq_length, image_height, image_width):
     y = np.concatenate((y, y_aug), axis=0)
     return X, y
 
+
 def prepare_data():
     X, y = load_data("./data", SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH)
-    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, shuffle=False)
-    # indices = np.random.permutation(len(X_train)).tolist()
-    indices = list(range(len(X_train)))
-    # X_train, y_train = np.array([X_train[i] for i in indices]), np.array([y_train[i] for i in indices])
-    return {
-        "X": X, "y": y, "X_train": X_train, "y_train": y_train, "X_val": X_val, "y_val": y_val, "indices": indices}
+    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, shuffle=True, random_state=42)
+    _indices = shuffle(range(len(X_train)), random_state=42)
+    return {"X": X, "y": y, "X_train": X_train, "y_train": y_train, "X_val": X_val, "y_val": y_val, "indices": _indices}
 
 
 def load_and_split_data():
@@ -179,7 +178,6 @@ def load_and_split_data():
         for name, array in data.items():
             np.save(f".data/{name}.npy", array)
     return data
-
 
 
 setup_logging("DEBUG" if DEBUG else "INFO")
@@ -210,17 +208,16 @@ model = create_model(input_shape)
 optimizer = Adam(learning_rate=LEARNING_RATE)
 model.compile(loss="binary_crossentropy", optimizer=optimizer, metrics=["accuracy"])
 
-callbacks = [CustomBatchEndCallback(X_train, y_train), WandbCallback(save_model=True)]
+callbacks = [CustomBatchEndCallback(X_train, y_train), WandbCallback(save_model=True),] #EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True)]
 
 with tf.device("CPU"):
-    train = Dataset.from_tensor_slices((X_train, y_train)).batch(BATCH_SIZE)
-    validate = Dataset.from_tensor_slices((X_val, y_val)).batch(BATCH_SIZE)
+    train = tf.data.Dataset.from_tensor_slices((X_train, y_train)).batch(BATCH_SIZE, drop_remainder=True, num_parallel_calls=tf.data.experimental.AUTOTUNE).prefetch(tf.data.experimental.AUTOTUNE)
 
 model.fit(
     train,
     epochs=EPOCHS,
     batch_size=BATCH_SIZE,
-    validation_data=validate,
+    validation_data=(X_val, y_val),
     callbacks=callbacks,
 )
 
@@ -229,9 +226,8 @@ model.save_weights(FILENAME)
 # model.load_weights(FILENAME)
 
 # Evaluate the model on the test set
-loss, acc = model.evaluate(validate, verbose=0)
+loss, acc = model.evaluate(X_val, y_val, verbose=2)
 logger.info(f"Validation accuracy: {acc:.4f}, loss: {loss:.4f}")
-
 
 # Make predictions on the test set
 y_pred = model.predict(X_val)
@@ -240,7 +236,6 @@ y_pred_classes = np.round(y_pred)
 # Evaluate the model performance
 logger.info("\nConfusion matrix:\n" + str(confusion_matrix(y_val, y_pred_classes)))
 logger.info("\nClassification report:\n" + str(classification_report(y_val, y_pred_classes)))
-
 
 # Predict on the entire dataset to look for patterns
 with tf.device("CPU"):
