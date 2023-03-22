@@ -21,6 +21,7 @@ from wandb.keras import WandbCallback, WandbModelCheckpoint, WandbMetricsLogger,
 from keras.callbacks import Callback
 from sklearn.model_selection import train_test_split
 from sklearn.utils import shuffle
+import tensorflow.keras.backend as K
 
 from tqdm import tqdm
 import pickle
@@ -28,9 +29,9 @@ from wandb.keras import WandbMetricsLogger, WandbModelCheckpoint
 
 # Define default hyperparameters
 SEQUENCE_LENGTH = 16
-IMAGE_HEIGHT = 480 // 5
-IMAGE_WIDTH = 640 // 5
-BATCH_SIZE = 8
+IMAGE_HEIGHT = 480 // 10
+IMAGE_WIDTH = 640 // 10
+BATCH_SIZE = 4
 EPOCHS = 50
 LEARNING_RATE = 1e-4
 PATIENCE = 5
@@ -53,10 +54,8 @@ def setup_logging(level="DEBUG", show_module=False):
 def create_model(input_shape):
     """Create a ConvLSTM model."""
     inputs = Input(shape=input_shape)
-    x = ConvLSTM2D(filters=4, kernel_size=(3, 3), activation="tanh", recurrent_dropout=0.2, return_sequences=True)(inputs)
-    x = MaxPooling3D(pool_size=(2, 2, 2))(x)
-    x = ConvLSTM2D(filters=2, kernel_size=(3, 3), activation="tanh", recurrent_dropout=0.2, return_sequences=True)(inputs)
-    x = MaxPooling3D(pool_size=(2, 2, 2))(x)
+    x = ConvLSTM2D(filters=2, kernel_size=(5, 5), activation="tanh", recurrent_dropout=0.2, return_sequences=True)(inputs)
+    # x = MaxPooling3D(pool_size=(2, 2, 2))(x)
     # x = TimeDistributed(GlobalAveragePooling2D())(x)
     x = Flatten()(x)
     x = Dense(4, activation="relu")(x)
@@ -74,6 +73,7 @@ class CustomBatchEndCallback(Callback):
         self.reset_test_table()
 
     def on_train_batch_end(self, batch_ix, logs=None):
+        super().on_train_batch_end(batch_ix, logs)
         if batch_ix % 10 == 0:
             # Get the X value (array of images) for the first sample in the batch
             X_step = self.X[batch_ix * BATCH_SIZE]
@@ -91,7 +91,6 @@ class CustomBatchEndCallback(Callback):
             self.test_table.add_data(batch_ix * BATCH_SIZE, y_step, *images)
             print(f" | Samples {batch_ix*BATCH_SIZE}-{batch_ix*BATCH_SIZE + SEQUENCE_LENGTH - 1} - Label: {y_step})'")
 
-        super().on_train_batch_end(batch_ix, logs)
 
     def reset_test_table(self):
         columns = ['Index', 'Prediction']
@@ -111,10 +110,10 @@ def load_data(images_path, seq_length, image_height, image_width):
     labels = []
     X_aug = []
     y_aug = []
-    datagen = ImageDataGenerator(width_shift_range=0.2, height_shift_range=0.2, brightness_range=[0.8, 1.2])
+    datagen = ImageDataGenerator(width_shift_range=0.2, height_shift_range=0.2)
 
     for file in tqdm(sorted(os.listdir(images_path), key=lambda x: int(x.split(".")[0].split("-")[0])), total=len(os.listdir(images_path))): # yapf: disable
-        if len(X) % 100 == 0:
+        if len(X) % (seq_length*10) == 0:
             logger.info(f"Loaded {len(X)} samples. Restarting augmentation seed.")
             seed = random.randint(0, 1000)
         if file.endswith(".jpg"):
@@ -160,31 +159,23 @@ def load_data(images_path, seq_length, image_height, image_width):
 
 
 def prepare_data():
-    X, y = load_data("./data_slim", SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH)
+    if os.path.exists(".data"):
+        X, y = np.load(".data/data.npz")["arr_0"], np.load(".data/data.npz")["arr_1"]
+    else:
+        X, y = load_data("./data", SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH)
+        os.makedirs(".data", exist_ok=True)
+        np.savez(".data/data.npz", X, y)
     # _indices = shuffle(range(len(X)), random_state=41)
     # X_train, y_train = shuffle(X, y, random_state=41)
     # X_val, y_val = shuffle(X, y, random_state=41)
     indices = np.random.permutation(len(X)).tolist()
     X_train, y_train = X[indices], y[indices]
     X_val, y_val = X[indices], y[indices]
-    X_train = X_train[:int(len(X) * 0.8)]
-    y_train = y_train[:int(len(y) * 0.8)]
-    X_val = X_val[int(len(X) * 0.8):]
-    y_val = y_val[int(len(y) * 0.8):]
-    return {"X": X, "y": y, "X_train": X_train, "y_train": y_train, "X_val": X_val, "y_val": y_val, "indices": indices}
-
-
-def load_and_split_data():
-    if os.path.exists(".data"):
-        data = {
-            name: np.load(f".data/{name}.npy")
-            for name in ["X", "y", "X_train", "y_train", "X_val", "y_val", "indices"]}
-    else:
-        data = prepare_data()
-        os.makedirs(".data", exist_ok=True)
-        for name, array in data.items():
-            np.save(f".data/{name}.npy", array)
-    return data
+    X_train = X_train[:int(len(X) * 0.5)]
+    y_train = y_train[:int(len(y) * 0.5)]
+    X_val = X_val[int(len(X) * 0.95):]
+    y_val = y_val[int(len(y) * 0.95):]
+    return {"X": X, "y": y, "X_train": X_train, "y_train": y_train, "X_val": X_val, "y_val": y_val}
 
 
 setup_logging("DEBUG" if DEBUG else "INFO")
@@ -202,10 +193,9 @@ wandb.init(project="aweful",
                "epoch": EPOCHS,
                "batch_size": BATCH_SIZE,})
 
-d = load_and_split_data()
+d = prepare_data()
 X, y, X_train, y_train = d["X"], d["y"], d["X_train"], d["y_train"]
 X_val, y_val = d["X_val"], d["y_val"]
-indices = d["indices"]
 
 # Create the ConvLSTM model
 input_shape = (SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1)
@@ -215,10 +205,7 @@ model = create_model(input_shape)
 optimizer = Adam(learning_rate=LEARNING_RATE)
 model.compile(loss="binary_crossentropy", optimizer=optimizer, metrics=["accuracy"])
 
-callbacks = [
-    CustomBatchEndCallback(X_train, y_train),
-    WandbCallback(save_model=True),
-    EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True)]
+K.set_learning_phase(False)
 
 with tf.device("CPU"):
     train = tf.data.Dataset.from_tensor_slices((X_train, y_train)).batch(BATCH_SIZE,
@@ -228,13 +215,20 @@ with tf.device("CPU"):
                                                                    drop_remainder=True,
                                                                    num_parallel_calls=tf.data.experimental.AUTOTUNE).prefetch(tf.data.experimental.AUTOTUNE)
 
-model.fit(
-    train,
-    epochs=EPOCHS,
-    batch_size=BATCH_SIZE,
-    validation_data=val,
-    callbacks=callbacks,
-)
+callbacks = [
+    CustomBatchEndCallback(X_train, y_train),
+    WandbCallback(log_weights=True, log_gradients=True, log_evaluation=True, log_batch_frequency=10, log_evaluation_frequency=10, log_weights_frequency=10, log_gradients_frequency=10, save_model=False,
+                  validation_data=(X_val, y_val), training_data=(X_train, y_train)),
+    EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True)]
+
+with tf.device("GPU"):
+    model.fit(
+        train,
+        epochs=EPOCHS,
+        batch_size=BATCH_SIZE,
+        validation_data=val,
+        callbacks=callbacks,
+    )
 
 # Save the model weights
 model.save_weights(FILENAME)
