@@ -18,7 +18,7 @@ from keras.preprocessing.image import ImageDataGenerator, image_utils
 from loguru import logger
 from sklearn.metrics import classification_report, confusion_matrix
 from wandb.keras import WandbCallback, WandbModelCheckpoint, WandbMetricsLogger, WandbEvalCallback
-from keras.callbacks import Callback
+from keras.callbacks import Callback, ModelCheckpoint
 from sklearn.model_selection import train_test_split
 from sklearn.utils import shuffle
 import tensorflow.keras.backend as K
@@ -31,7 +31,7 @@ from wandb.keras import WandbMetricsLogger, WandbModelCheckpoint
 SEQUENCE_LENGTH = 16
 IMAGE_HEIGHT = 480 // 10
 IMAGE_WIDTH = 640 // 10
-BATCH_SIZE = 4
+BATCH_SIZE = 8
 EPOCHS = 50
 LEARNING_RATE = 1e-4
 PATIENCE = 5
@@ -171,18 +171,41 @@ def prepare_data():
     indices = np.random.permutation(len(X)).tolist()
     X_train, y_train = X[indices], y[indices]
     X_val, y_val = X[indices], y[indices]
-    X_train = X_train[:int(len(X) * 0.5)]
-    y_train = y_train[:int(len(y) * 0.5)]
+    X_train = X_train[:int(len(X) * 0.95)]
+    y_train = y_train[:int(len(y) * 0.95)]
     X_val = X_val[int(len(X) * 0.95):]
     y_val = y_val[int(len(y) * 0.95):]
     return {"X": X, "y": y, "X_train": X_train, "y_train": y_train, "X_val": X_val, "y_val": y_val}
 
+def data_generator(X, y, batch_size):
+    num_samples = len(X)
+    while True:
+        # Shuffle the data at the start of each epoch
+        indices = np.arange(num_samples)
+        np.random.shuffle(indices)
+        X = X[indices]
+        y = y[indices]
+
+        # Generate batches of data
+        for start in range(0, num_samples, batch_size):
+            if start + batch_size > num_samples:
+                break
+            end = start + batch_size
+            X_batch = X[start:end]
+            y_batch = y[start:end]
+            yield X_batch, y_batch
 
 setup_logging("DEBUG" if DEBUG else "INFO")
-logger.info(f"Num GPUs Available: {len(tf.config.list_physical_devices('GPU'))}")
+# logger.info(f"Num GPUs Available: {len(tf.config.list_physical_devices('GPU'))}")
 # Enable mixed precision training
-# policy = mixed_precision.Policy("mixed_float16")
-# mixed_precision.set_global_policy(policy)
+policy = mixed_precision.Policy('mixed_float16')
+mixed_precision.set_global_policy(policy)
+
+# Wrap the input pipeline with a Cast layer
+if policy.name == 'mixed_float16':
+    cast_dtype = 'float16'
+else:
+    cast_dtype = 'float32'
 
 # start a new wandb run to track this script
 wandb.init(project="aweful",
@@ -205,52 +228,63 @@ model = create_model(input_shape)
 optimizer = Adam(learning_rate=LEARNING_RATE)
 model.compile(loss="binary_crossentropy", optimizer=optimizer, metrics=["accuracy"])
 
-K.set_learning_phase(False)
+# K.set_learning_phase(False)
 
-with tf.device("CPU"):
-    train = tf.data.Dataset.from_tensor_slices((X_train, y_train)).batch(BATCH_SIZE,
-                                                                         drop_remainder=True,
-                                                                         num_parallel_calls=tf.data.experimental.AUTOTUNE).prefetch(tf.data.experimental.AUTOTUNE)
-    val = tf.data.Dataset.from_tensor_slices((X_val, y_val)).batch(BATCH_SIZE,
-                                                                   drop_remainder=True,
-                                                                   num_parallel_calls=tf.data.experimental.AUTOTUNE).prefetch(tf.data.experimental.AUTOTUNE)
+train_dataset = tf.data.Dataset.from_generator(generator=data_generator,
+                                                args=(X_train, y_train, BATCH_SIZE),
+                                                output_types=(tf.float16, tf.int16),
+                                                output_shapes=((BATCH_SIZE, SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH,
+                                                                1), (BATCH_SIZE,))).prefetch(tf.data.experimental.AUTOTUNE)
+
+val_dataset = tf.data.Dataset.from_generator(generator=data_generator,
+                                                args=(X_val, y_val, BATCH_SIZE),
+                                                output_types=(tf.float16, tf.int16),
+                                                output_shapes=((BATCH_SIZE, SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH,
+                                                                1), (BATCH_SIZE,))).prefetch(tf.data.experimental.AUTOTUNE)
+
 
 callbacks = [
-    CustomBatchEndCallback(X_train, y_train),
-    WandbCallback(log_weights=True, log_gradients=True, log_evaluation=True, log_batch_frequency=10, log_evaluation_frequency=10, log_weights_frequency=10, log_gradients_frequency=10, save_model=False,
-                  validation_data=(X_val, y_val), training_data=(X_train, y_train)),
-    EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True)]
+    CustomBatchEndCallback(X, y),
+    WandbCallback(log_weights=True, log_evaluation=True, log_batch_frequency=10, log_evaluation_frequency=10, log_weights_frequency=10, save_model=False),
+    EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True),
+    ModelCheckpoint(FILENAME, monitor="val_loss", save_best_only=True, verbose=1)]
 
-with tf.device("GPU"):
-    model.fit(
-        train,
-        epochs=EPOCHS,
-        batch_size=BATCH_SIZE,
-        validation_data=val,
-        callbacks=callbacks,
-    )
+# if os.path.exists(FILENAME):
+#     model.load_weights(FILENAME)
+
+# Compute the number of steps per epoch
+steps_per_epoch = len(X_train) // BATCH_SIZE
+validation_steps = len(X_val) // BATCH_SIZE
+
+model.fit(
+    train_dataset,
+    epochs=EPOCHS,
+    callbacks=callbacks,
+    steps_per_epoch=steps_per_epoch,
+    validation_data=val_dataset,
+    validation_steps=validation_steps,
+)
 
 # Save the model weights
 model.save_weights(FILENAME)
-# model.load_weights(FILENAME)
 
-# Evaluate the model on the test set
-loss, acc = model.evaluate(val, verbose=2)
-logger.info(f"Validation accuracy: {acc:.4f}, loss: {loss:.4f}")
+# # Evaluate the model on the test set
+# loss, acc = model.evaluate(val_dataset, verbose=2)
+# logger.info(f"Validation accuracy: {acc:.4f}, loss: {loss:.4f}")
 
-# Make predictions on the test set
-y_pred = model.predict(X_val)
-y_pred_classes = np.round(y_pred)
+# # Make predictions on the test set
+# y_pred = model.predict(X_val)
+# y_pred_classes = np.round(y_pred)
 
-# Evaluate the model performance
-logger.info("\nConfusion matrix:\n" + str(confusion_matrix(y_val, y_pred_classes)))
-logger.info("\nClassification report:\n" + str(classification_report(y_val, y_pred_classes)))
+# # Evaluate the model performance
+# logger.info("\nConfusion matrix:\n" + str(confusion_matrix(y_val, y_pred_classes)))
+# logger.info("\nClassification report:\n" + str(classification_report(y_val, y_pred_classes)))
 
-# Predict on the entire dataset to look for patterns
-with tf.device("CPU"):
-    X_predict = Dataset.from_tensor_slices(X).batch(BATCH_SIZE)
+# # Predict on the entire dataset to look for patterns
+# # with tf.device("CPU"):
+# X_predict = Dataset.from_tensor_slices(X).batch(BATCH_SIZE)
 
-model_predictions = model.predict(X_predict)
+model_predictions = model.predict(X, batch_size=BATCH_SIZE, verbose=1)
 model_predictions = (model_predictions > 0.5).astype(int)
 
 # check and show results
