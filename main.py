@@ -3,7 +3,10 @@ import argparse
 import os
 import random
 import sys
+from collections import deque
 
+import subprocess
+import shlex
 import keras
 import numpy as np
 import tensorflow as tf
@@ -29,8 +32,8 @@ from wandb.keras import WandbMetricsLogger, WandbModelCheckpoint
 
 # Define default hyperparameters
 SEQUENCE_LENGTH = 16
-IMAGE_HEIGHT = 480 // 10
-IMAGE_WIDTH = 640 // 10
+IMAGE_HEIGHT = 480 // 5
+IMAGE_WIDTH = 640 // 5
 BATCH_SIZE = 16
 EPOCHS = 50
 LEARNING_RATE = 1e-4
@@ -55,7 +58,7 @@ def create_model(input_shape):
     """Create a ConvLSTM model."""
     inputs = Input(shape=input_shape)
     x = ConvLSTM2D(filters=2, kernel_size=(5, 5), activation="tanh", recurrent_dropout=0.2, return_sequences=True)(inputs)
-    # x = MaxPooling3D(pool_size=(2, 2, 2))(x)
+    x = MaxPooling3D(pool_size=(2, 2, 2))(x)
     # x = TimeDistributed(GlobalAveragePooling2D())(x)
     x = Flatten()(x)
     x = Dense(4, activation="relu")(x)
@@ -81,9 +84,9 @@ class CustomBatchEndCallback(Callback):
 
             # create a table with each image of the sequence
             images = []
-            for sequence_ix, image in enumerate(X_step):
+            for sequence_ix, _img in enumerate(X_step):
                 # image is the same as self.x_train[batch_ix * BATCH_SIZE + ix][0]
-                img = wandb.Image(image, caption=f"Image {batch_ix*BATCH_SIZE + sequence_ix} - Label: {y_step}")
+                img = wandb.Image(_img, caption=f"Image {batch_ix*BATCH_SIZE + sequence_ix} - Label: {y_step}")
                 images.append(img)
 
             # Adds the row to the table with the actual index of the first image of the sequence,
@@ -180,12 +183,6 @@ def prepare_data():
 def data_generator(X, y, batch_size):
     num_samples = len(X)
     while True:
-        # # Shuffle the data at the start of each epoch
-        # indices = np.arange(num_samples)
-        # np.random.shuffle(indices)
-        # X = X[indices]
-        # y = y[indices]
-
         # Generate batches of data
         for start in range(0, num_samples, batch_size):
             if start + batch_size > num_samples:
@@ -196,20 +193,29 @@ def data_generator(X, y, batch_size):
             yield X_batch, y_batch
 
 
-setup_logging("DEBUG" if DEBUG else "INFO")
-# logger.info(f"Num GPUs Available: {len(tf.config.list_physical_devices('GPU'))}")
-# Enable mixed precision training
-policy = mixed_precision.Policy('mixed_float16')
-mixed_precision.set_global_policy(policy)
+def set_mixed_precision():
+    # Enable mixed precision training
+    policy = mixed_precision.Policy('mixed_float16')
+    mixed_precision.set_global_policy(policy)
+    # # Wrap the input pipeline with a Cast layer
+    # if policy.name == 'mixed_float16':
+    #     cast_dtype = 'float16'
+    # else:
+    #     cast_dtype = 'float32'
+    # return cast_dtype
 
-# Wrap the input pipeline with a Cast layer
-if policy.name == 'mixed_float16':
-    cast_dtype = 'float16'
+
+if len(sys.argv) >= 2 and sys.argv[1] == "train":
+    sys.argv.pop(1)
+    routine = "train"
 else:
-    cast_dtype = 'float32'
+    routine = "clock"
+
+setup_logging("DEBUG" if DEBUG else "INFO")
+logger.info(f"Num GPUs Available: {len(tf.config.list_physical_devices('GPU'))}")
 
 # start a new wandb run to track this script
-wandb.init(project="aweful",
+wandb.init(project=f"aweful-{routine}",
            config={
                "optimizer": "adam",
                "loss": "binary_crossentropy",
@@ -217,6 +223,7 @@ wandb.init(project="aweful",
                "epoch": EPOCHS,
                "batch_size": BATCH_SIZE,})
 
+set_mixed_precision()
 d = prepare_data()
 X, y, X_train, y_train = d["X"], d["y"], d["X_train"], d["y_train"]
 X_val, y_val = d["X_val"], d["y_val"]
@@ -229,144 +236,122 @@ model = create_model(input_shape)
 optimizer = Adam(learning_rate=LEARNING_RATE)
 model.compile(loss="binary_crossentropy", optimizer=optimizer, metrics=["accuracy"])
 
-train_dataset = tf.data.Dataset.from_generator(generator=data_generator,
-                                               args=(X_train, y_train, BATCH_SIZE),
-                                               output_types=(tf.float16, tf.int16),
-                                               output_shapes=(
-                                                   (BATCH_SIZE, SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1),
-                                                   (BATCH_SIZE,),
-                                               )).prefetch(tf.data.experimental.AUTOTUNE)
-
-with tf.device("CPU"):
-    val_dataset = tf.data.Dataset.from_generator(generator=data_generator,
-                                                 args=(X_val, y_val, BATCH_SIZE),
-                                                 output_types=(tf.float16, tf.int16),
-                                                 output_shapes=(
-                                                     (BATCH_SIZE, SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1),
-                                                     (BATCH_SIZE,),
-                                                 )).prefetch(tf.data.experimental.AUTOTUNE)
-
-callbacks = [
-    CustomBatchEndCallback(X, y),
-    WandbCallback(log_weights=True,
-                  log_evaluation=True,
-                  log_batch_frequency=10,
-                  log_evaluation_frequency=10,
-                  log_weights_frequency=10,
-                  save_model=False),
-    EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True),
-    ModelCheckpoint(FILENAME, monitor="val_loss", save_best_only=True, verbose=1)]
-
 if os.path.exists(FILENAME):
     model.load_weights(FILENAME)
+    logger.success(f"Loaded model weights from {FILENAME}")
 
-# Compute the number of steps per epoch
-steps_per_epoch = len(X_train) // BATCH_SIZE
-validation_steps = len(X_val) // BATCH_SIZE
+if routine == "train":
+    with tf.device("CPU"):
+        train_dataset = tf.data.Dataset.from_generator(generator=data_generator,
+                                                       args=(X_train, y_train, BATCH_SIZE),
+                                                       output_types=(tf.float16, tf.int16),
+                                                       output_shapes=(
+                                                           (BATCH_SIZE, SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1),
+                                                           (BATCH_SIZE,),
+                                                       )).prefetch(tf.data.experimental.AUTOTUNE)
 
-# model.fit(
-#     train_dataset,
-#     epochs=EPOCHS,
-#     callbacks=callbacks,
-#     steps_per_epoch=steps_per_epoch,
-#     validation_data=val_dataset,
-#     validation_steps=validation_steps,
-# )
+        val_dataset = tf.data.Dataset.from_generator(generator=data_generator,
+                                                     args=(X_val, y_val, BATCH_SIZE),
+                                                     output_types=(tf.float16, tf.int16),
+                                                     output_shapes=(
+                                                         (BATCH_SIZE, SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1),
+                                                         (BATCH_SIZE,),
+                                                     )).prefetch(tf.data.experimental.AUTOTUNE)
 
-logger.info("Finished training")
-# Save the model weights
-model.save_weights(FILENAME)
+    callbacks = [
+        CustomBatchEndCallback(X, y),
+        WandbCallback(log_weights=True,
+                      log_evaluation=True,
+                      log_batch_frequency=10,
+                      log_evaluation_frequency=10,
+                      log_weights_frequency=10,
+                      save_model=False),
+        EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True),
+        ModelCheckpoint(FILENAME, monitor="val_loss", save_best_only=True, verbose=1)]
 
-# # Make predictions on the test set
-y_pred = model.predict(X_val)
-y_pred_classes = np.round(y_pred)
+    # Compute the number of steps per epoch
+    steps_per_epoch = len(X_train) // BATCH_SIZE
+    validation_steps = len(X_val) // BATCH_SIZE
 
-# # Evaluate the model performance
-logger.info("\nConfusion matrix:\n" + str(confusion_matrix(y_val, y_pred_classes)))
-logger.info("\nClassification report:\n" + str(classification_report(y_val, y_pred_classes)))
-
-# # Predict on the entire dataset to look for patterns
-with tf.device("CPU"):
-    X_predict = tf.data.Dataset.from_generator(generator=data_generator,
-                                               args=(X, y, BATCH_SIZE),
-                                               output_types=(tf.float16, tf.int16),
-                                               output_shapes=(
-                                                   (BATCH_SIZE, SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1),
-                                                   (BATCH_SIZE,),
-                                               )).prefetch(tf.data.experimental.AUTOTUNE)
-
-model_predictions = model.predict(X_predict, steps=steps_per_epoch, verbose=1)
-model_predictions = (model_predictions > 0.5).astype(int)
-
-# check and show results
-
-i = 0
-for i, (prediction, actual) in enumerate(zip(model_predictions, y)):
-    if prediction != actual:
-        logger.warning(f"{i} PRED: {'sleep' if prediction else 'not sleep'}\t ACTUAL: {'sleep' if actual else 'not sleep'}")
-    else:
-        logger.success(f"{i} {'sleep' if prediction else 'not sleep'}")
-    i += 1
-
-wandb.finish()
-
-sleep_counter = [0] * 6 * 60
-while True:
-    # Capture an image from the webcam
-    # ret, frame = cap.read()
-    # if not ret:
-    #     break
-
-    # Preprocess the image
-    path = "/tmp/image.jpg"
-    try:
-        os.system(f"fswebcam {path} -d /dev/video0 -S2 -F1")
-    except:
-        continue
-    image = image_utils.image_utils.load_img(
-        path,
-        target_size=(image_height, image_width),
-        color_mode="grayscale",
+    model.fit(
+        train_dataset,
+        epochs=EPOCHS,
+        callbacks=callbacks,
+        steps_per_epoch=steps_per_epoch,
+        validation_data=val_dataset,
+        validation_steps=validation_steps,
     )
-    image = image_utils.image_utils.img_to_array(image) / 255.0
+    logger.info("Finished training")
 
-    # Add the preprocessed image to the sequence
-    image_sequence.append(image)
+    # Save the model weights
+    model.save_weights(FILENAME)
 
-    # If the sequence is of the required length, make a prediction
-    if len(image_sequence) == sequence_length:
-        X = np.expand_dims(np.array(image_sequence), axis=0)
-        X = np.expand_dims(X, axis=-1)
-        y_pred = model.predict(X, verbose=1)
-        y_pred_class = (y_pred > 0.5).astype(int)
+    # # Make predictions on the test set
+    y_pred = model.predict(X_val)
+    y_pred_classes = np.round(y_pred)
 
-        # If the model predicts sleep, start the sleep timer
-        if y_pred_class == 1:
+    # # Evaluate the model performance
+    logger.info("\nConfusion matrix:\n" + str(confusion_matrix(y_val, y_pred_classes)))
+    logger.info("\nClassification report:\n" + str(classification_report(y_val, y_pred_classes)))
+
+    # # Predict on the entire dataset to look for patterns
+    # with tf.device("CPU"):
+    #     X_predict = tf.data.Dataset.from_generator(generator=data_generator,
+    #                                                args=(X, y, BATCH_SIZE),
+    #                                                output_types=(tf.float16, tf.int16),
+    #                                                output_shapes=(
+    #                                                    (BATCH_SIZE, SEQUENCE_LENGTH, IMAGE, IMAGE_WIDTH, 1),
+    #                                                    (BATCH_SIZE,),
+    #                                                )).prefetch(tf.data.experimental.AUTOTUNE)
+
+    for i in range(0, len(X), BATCH_SIZE):
+        X_predict = X[i:i + BATCH_SIZE]
+        y_predict = y[i:i + BATCH_SIZE]
+        y_out = model.predict(X_predict, verbose=0)
+        y_out = np.round(y_out).flatten().astype(int)
+        for n, cat in enumerate(y_out):
+            prediction = "Awake" if cat == 0 else "Sleep"
+            if y_predict[n] != cat: color = "\033[91m"
+            else: color = "\033[92m"
+            print(color + f"{i}: " + str(prediction) + "\033[0m")
+
+if routine == "clock":
+    sleep_counter = deque(maxlen=6 * 60)
+    image_sequence = deque(maxlen=SEQUENCE_LENGTH)
+    path = "/tmp/image.jpg"
+    while True:
+        # Take a photo
+        subprocess.run(shlex.split(f"fswebcam {path} -d /dev/video0 -S2 -F1"),
+                       check=False,
+                       stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL)
+
+        # Load and add the preprocessed image to the sequence
+        image = image_utils.load_img(path, target_size=(IMAGE_HEIGHT, IMAGE_WIDTH), color_mode="grayscale")
+        image = image_utils.img_to_array(image) / 255.0
+        image_sequence.append(image)
+
+        # Start making predictions only after the sequence is full
+        if len(image_sequence) < SEQUENCE_LENGTH:
+            continue
+
+        X_loop = np.array([image_sequence])
+        y_loop = model.predict(X_loop, verbose=1)
+        y_loop_class = (y_loop[0][0] > 0.5).astype(int)
+
+        if y_loop_class == 1:
             sleep_counter.append(1)
             logger.warning("Sleep detected")
         else:
             sleep_counter.append(0)
             logger.info("No sleep detected")
 
-        if sleep_counter >= 6 * 60 * 0.8: # 80% of 6 hours
-                print("Wake up! You've been sleeping for more than 6 hours!")
-                # Implement your alarm triggering mechanism here
-                alarm_triggered = True
+        # 80% of the last 6 hours
+        if sleep_counter.count(1) > 0.8 * 6 * 60:
+            print("Wake up! You've been sleeping for more than 6 hours!")
+            # Implement your alarm triggering mechanism here
+            alarm_triggered = True
         else:
             alarm_triggered = False
 
-        # Remove the oldest image from the sequence
-        sleep_counter.pop(0)
-        image_sequence.pop(0)
-
-    # Display the image
-    # cv2.imshow("Sleep Detection", frame)
-    # key = cv2.waitKey(1) & 0xFF
-
-    # If the 'q' key is pressed, break from the loop
-    # if key == ord("q"):
-    #     break
-
-# Release the camera and close the window
-cap.release()
-cv2.destroyAllWindows()
+wandb.finish()
