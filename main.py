@@ -34,8 +34,8 @@ from wandb.keras import WandbMetricsLogger, WandbModelCheckpoint
 
 # Define default hyperparameters
 SEQUENCE_LENGTH = 16
-IMAGE_HEIGHT = 480 // 5
-IMAGE_WIDTH = 640 // 5
+IMAGE_HEIGHT = 480 // 10
+IMAGE_WIDTH = 640 // 10
 BATCH_SIZE = 10
 EPOCHS = 50
 LEARNING_RATE = 1e-4
@@ -70,12 +70,19 @@ def create_model(input_shape):
     return out_model
 
 
+def create_wandb_table():
+    columns = ['Index', 'Date', 'Prediction']
+    for s in range(SEQUENCE_LENGTH):
+        columns.append(f'Sample {s + 1}')
+    return wandb.Table(columns=columns, allow_mixed_types=True)
+
+
 class CustomBatchEndCallback(Callback):
     def __init__(self, X, y, **kwargs):
         super().__init__(**kwargs)
         self.X = X
         self.y = y
-        self.reset_test_table()
+        self.test_table = create_wandb_table()
 
     def on_train_batch_end(self, batch_ix, logs=None):
         super().on_train_batch_end(batch_ix, logs)
@@ -93,18 +100,13 @@ class CustomBatchEndCallback(Callback):
 
             # Adds the row to the table with the actual index of the first image of the sequence,
             # the original label y, and the images
-            self.test_table.add_data(batch_ix * BATCH_SIZE, y_step, *images)
+            date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.test_table.add_data(batch_ix * BATCH_SIZE, date, y_step, *images)
             print(f" | Samples {batch_ix*BATCH_SIZE}-{batch_ix*BATCH_SIZE + SEQUENCE_LENGTH - 1} - Label: {y_step})'")
-
-    def reset_test_table(self):
-        columns = ['Index', 'Prediction']
-        for s in range(SEQUENCE_LENGTH):
-            columns.append(f'Sample {s + 1}')
-        self.test_table = wandb.Table(columns=columns)
 
     def on_epoch_end(self, epoch, logs=None):
         wandb.log({"data": self.test_table}, commit=True)
-        self.reset_test_table()
+        self.test_table = create_wandb_table()
         super().on_epoch_end(epoch, logs)
 
 
@@ -150,6 +152,7 @@ def load_data(images_path, seq_length, image_height, image_width):
                 color_mode="grayscale",
             )
             image = image_utils.img_to_array(image) / 255.0
+            image = image[:-21, :]
             images.append(image)
             if "sleep" in file:
                 labels.append(1)
@@ -159,17 +162,17 @@ def load_data(images_path, seq_length, image_height, image_width):
             X.append(np.array(images))
             y.append(labels[-1])
 
-            # Augmentation
-            augmented_images = []
-            seed = random.randint(0, 1000)
-            for image in images:
-                # for _ in range(1):
-                # transformed = datagen.random_transform(image, seed=seed)
-                cropped = get_random_crop(image, seed=seed)
-                augmented_images.append(cropped)
+            # # Augmentation
+            # augmented_images = []
+            # seed = random.randint(0, 1000)
+            # for image in images:
+            #     # for _ in range(1):
+            #     # transformed = datagen.random_transform(image, seed=seed)
+            #     cropped = get_random_crop(image, seed=seed)
+            #     augmented_images.append(cropped)
 
-            X_aug.append(np.array(augmented_images))
-            y_aug.append(labels[-1])
+            # X_aug.append(np.array(augmented_images))
+            # y_aug.append(labels[-1])
 
             images.pop(0)
             labels.pop(0)
@@ -203,6 +206,8 @@ def prepare_data():
     y_train = y_train[:int(len(y) * 0.9)]
     X_val = X_val[int(len(X) * 0.9):]
     y_val = y_val[int(len(y) * 0.9):]
+    X = np.array(X, dtype=np.float16)
+    y = np.array(y, dtype=np.int8)
     return {"X": X, "y": y, "X_train": X_train, "y_train": y_train, "X_val": X_val, "y_val": y_val}
 
 
@@ -332,16 +337,16 @@ if routine == "train":
     #                                                    (BATCH_SIZE,),
     #                                                )).prefetch(tf.data.experimental.AUTOTUNE)
 
-for i in range(0, len(X), BATCH_SIZE):
-    X_predict = X[i:i + BATCH_SIZE]
-    y_predict = y[i:i + BATCH_SIZE]
-    y_out = model.predict(X_predict, verbose=0)
-    y_out = np.round(y_out).flatten().astype(int)
-    for n, cat in enumerate(y_out):
-        prediction = "🆙" if cat == 0 else "💤"
-        if y_predict[n] != cat: color = "\033[91m"
-        else: color = "\033[92m" if cat == 0 else "\033[93m"
-        print(color + f"{i:05d}:" + str(prediction) + "\033[0m", end=" | ")
+# for i in range(0, len(X), BATCH_SIZE):
+#     X_predict = X[i:i + BATCH_SIZE]
+#     y_predict = y[i:i + BATCH_SIZE]
+#     y_out = model.predict(X_predict, verbose=0)
+#     y_out = np.round(y_out).flatten().astype(int)
+#     for n, cat in enumerate(y_out):
+#         prediction = "🆙" if cat == 0 else "💤"
+#         if y_predict[n] != cat: color = "\033[91m"
+#         else: color = "\033[92m" if cat == 0 else "\033[93m"
+#         print(color + f"{i:05d}:" + str(prediction) + "\033[0m", end=" | ")
 
 if routine == "clock":
     sleep_counter = deque(maxlen=6 * 60)
@@ -349,14 +354,10 @@ if routine == "clock":
     # images_batch = deque(maxlen=BATCH_SIZE)
     path = "/tmp/image.jpg"
 
-    columns = ['Date', 'Prediction']
-    for s in range(SEQUENCE_LENGTH):
-        columns.append(f'Sample {s + 1}')
-    test_table = wandb.Table(columns=columns)
-
-    l = 0
+    main_table = create_wandb_table()
+    index = 0
     while True:
-        l += 1
+        index += 1
         # Take a photo
         subprocess.run(shlex.split(f"fswebcam {path} -d /dev/video0 -S2 -F1"),
                        check=False,
@@ -366,22 +367,27 @@ if routine == "clock":
         # Load and add the preprocessed image to the sequence
         image = image_utils.load_img(path, target_size=(IMAGE_HEIGHT, IMAGE_WIDTH), color_mode="grayscale")
         image = image_utils.img_to_array(image) / 255.0
+        image = image[:-21, :]
         images.append(image)
 
         # Start making predictions only after the sequence is full
         if len(images) < SEQUENCE_LENGTH:
             continue
 
-        X_loop = np.array([images])
-        y_loop = model.predict(X_loop, verbose=1)
-        y_loop_class = (y_loop[0][0] > 0.5).astype(int)
+        X_loop = np.array([images], dtype=np.float16);
+        y_loop = model.predict(X_loop, verbose=0)
+        y_loop_class = np.round(y_loop).flatten().astype(int)[0]
 
         # Send data to wandb
-        if l % SEQUENCE_LENGTH == 0:
-            date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            prediction = "Awake 🆙" if y_loop_class == 0 else "Sleep 💤"
-            test_table.add_data(date, prediction, *[wandb.Image(_img) for _img in images])
-            wandb.log({"data": test_table}, commit=True)
+        date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        prediction = "Awake 🆙" if y_loop_class == 0 else "Sleep 💤"
+        main_table.add_data(index, date, prediction, *[wandb.Image(_img) for _img in images])
+
+        if (index - 1) % SEQUENCE_LENGTH == 0:
+            temp_table = create_wandb_table()
+            for data in main_table.data:
+                temp_table.add_data(*data)
+            wandb.log({"main_table": temp_table})
 
         if y_loop_class == 1:
             sleep_counter.append(1)
