@@ -1,41 +1,36 @@
 #!/usr/bin/env python3
 
 import datetime
-import argparse
 import os
 import random
+import shlex
+import subprocess
 import sys
 from collections import deque
+import cv2
 
-import subprocess
-import shlex
-import keras
+from concurrent.futures import ProcessPoolExecutor, as_completed, ThreadPoolExecutor
 import numpy as np
+import cupy as cp
 import tensorflow as tf
-import wandb
 from keras import mixed_precision
-from tensorflow.data import Dataset
-from keras.callbacks import EarlyStopping, ReduceLROnPlateau
-from keras.layers import (ConvLSTM2D, Dense, Dropout, Flatten, Input, MaxPooling3D, TimeDistributed, GlobalAveragePooling2D)
+from keras.callbacks import (Callback, EarlyStopping, ModelCheckpoint)
+from keras.layers import (ConvLSTM2D, Dense, Flatten, Input, MaxPooling3D)
 from keras.models import Model
 from keras.optimizers import Adam
 from keras.preprocessing.image import ImageDataGenerator, image_utils
 from loguru import logger
 from sklearn.metrics import classification_report, confusion_matrix
-from wandb.keras import WandbCallback, WandbModelCheckpoint, WandbMetricsLogger, WandbEvalCallback
-from keras.callbacks import Callback, ModelCheckpoint
-from sklearn.model_selection import train_test_split
 from sklearn.utils import shuffle
-import tensorflow.keras.backend as K
-
 from tqdm import tqdm
-import pickle
-from wandb.keras import WandbMetricsLogger, WandbModelCheckpoint
+from wandb.keras import WandbCallback
+
+import wandb
 
 # Define default hyperparameters
 SEQUENCE_LENGTH = 16
-IMAGE_HEIGHT = 480 // 10
-IMAGE_WIDTH = 640 // 10
+IMAGE_HEIGHT = 480 // 2
+IMAGE_WIDTH = 640 // 2
 BATCH_SIZE = 10
 EPOCHS = 50
 LEARNING_RATE = 1e-4
@@ -128,60 +123,75 @@ def get_random_crop(image, seed=None):
     y = np.random.randint(0, height - new_height)
 
     crop = image[y:y + new_height, x:x + new_width]
-    resized_crop = image_utils.array_to_img(crop).resize((width, height))
-    resized_crop = image_utils.img_to_array(resized_crop)
+    resized_crop = cv2.resize(crop, (width, height))
+    resized_crop = np.expand_dims(resized_crop, axis=-1) # Add an extra channel dimension
     return resized_crop
+
+
+def get_image(image_path, image_height, image_width):
+    image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    image = image[0:image.shape[0], 0:image.shape[1] - 21]
+    image = cv2.resize(image, (image_width, image_height))
+    image = np.expand_dims(image, axis=-1) # Add an extra channel dimension
+    return image
+
+
+def process_image_sequence(image_files, images_path, image_height, image_width):
+    images = []
+    labels = []
+    augmented_images = []
+    datagen = ImageDataGenerator(rotation_range=10)
+    seed = random.randint(0, 1000)
+
+    for file in image_files:
+        image = get_image(os.path.join(images_path, file), image_height, image_width)
+        label = 1 if "sleep" in file else 0
+        images.append(image)
+        labels.append(label)
+
+        # Augmentation
+        transformed = datagen.random_transform(image, seed=seed)
+        cropped = get_random_crop(transformed, seed=seed)
+        augmented_images.append(cropped)
+
+    return images, labels[-1], augmented_images
 
 
 def load_data(images_path, seq_length, image_height, image_width):
     X, y = [], []
-    images = []
-    labels = []
-    X_aug = []
-    y_aug = []
-    # datagen = ImageDataGenerator(width_shift_range=0.2, height_shift_range=0.2)
+    X_aug, y_aug = [], []
 
-    for file in tqdm(sorted(os.listdir(images_path), key=lambda x: int(x.split(".")[0].split("-")[0])), total=len(os.listdir(images_path))): # yapf: disable
-        # if (len(X) - seq_length) % (seq_length*10) == 0:
-        #     logger.info(f"Loaded {len(X)} samples. Restarting augmentation seed.")
-        if file.endswith(".jpg"):
-            logger.debug(f"Loading {file}")
-            image = image_utils.load_img(
-                os.path.join(images_path, file),
-                target_size=(image_height, image_width),
-                color_mode="grayscale",
-            )
-            image = image_utils.img_to_array(image) / 255.0
-            image = image[:-21, :]
-            images.append(image)
-            if "sleep" in file:
-                labels.append(1)
-            else:
-                labels.append(0)
-        if len(images) == seq_length:
-            X.append(np.array(images))
-            y.append(labels[-1])
+    # Get the list of image files
+    image_files = sorted((file for file in os.listdir(images_path) if file.endswith(".jpg")),
+                         key=lambda x: int(x.split(".")[0].split("-")[0]))
 
-            # # Augmentation
-            # augmented_images = []
-            # seed = random.randint(0, 1000)
-            # for image in images:
-            #     # for _ in range(1):
-            #     # transformed = datagen.random_transform(image, seed=seed)
-            #     cropped = get_random_crop(image, seed=seed)
-            #     augmented_images.append(cropped)
+    # Use a ThreadPoolExecutor to process image sequences in parallel
+    with ThreadPoolExecutor(max_workers=16) as executor:
+        # Create the tqdm progress bar
+        progress_bar = tqdm(total=len(image_files) - seq_length,
+                            smoothing=0.1,
+                            desc="Processing images...",)
 
-            # X_aug.append(np.array(augmented_images))
-            # y_aug.append(labels[-1])
+        # Submit the tasks to the executor
+        futures = [
+            executor.submit(process_image_sequence, image_files[i:i + seq_length], images_path, image_height, image_width)
+            for i in range(0,
+                           len(image_files) - seq_length)]
 
-            images.pop(0)
-            labels.pop(0)
+        # Use as_completed() to process the results as they become available, and update the progress bar
+        for future in as_completed(futures):
+            images, label, augmented_images = future.result()
+            X.append(images)
+            X_aug.append(augmented_images)
+            y.append(label)
+            y_aug.append(label)
+            progress_bar.update(1)
 
-        if len(images) > seq_length:
-            images.pop(0)
-            labels.pop(0)
-    X = np.array(X, dtype=np.float16)
-    y = np.array(y, dtype=np.int8)
+        progress_bar.close()
+
+    logger.info("Data loaded. Preparing arrays...")
+    X = np.array(X)
+    y = np.array(y)
     X_aug = np.array(X_aug)
     y_aug = np.array(y_aug)
     X = np.concatenate((X, X_aug), axis=0)
@@ -191,21 +201,20 @@ def load_data(images_path, seq_length, image_height, image_width):
 
 def prepare_data():
     if os.path.exists(".data"):
+        logger.info("Loading data from disk...")
         X, y = np.load(".data/data.npz")["arr_0"], np.load(".data/data.npz")["arr_1"]
     else:
         X, y = load_data("./data", SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH)
         os.makedirs(".data", exist_ok=True)
+        logger.info("Saving data to disk...")
         np.savez(".data/data.npz", X, y)
-    # _indices = shuffle(range(len(X)), random_state=41)
-    # X_train, y_train = shuffle(X, y, random_state=41)
-    # X_val, y_val = shuffle(X, y, random_state=41)
     indices = np.random.permutation(len(X)).tolist()
     X_train, y_train = X[indices], y[indices]
     X_val, y_val = X[indices], y[indices]
-    X_train = X_train[:int(len(X) * 0.9)]
-    y_train = y_train[:int(len(y) * 0.9)]
-    X_val = X_val[int(len(X) * 0.9):]
-    y_val = y_val[int(len(y) * 0.9):]
+    X_train = X_train[:int(len(X) * 0.8)]
+    y_train = y_train[:int(len(y) * 0.8)]
+    X_val = X_val[int(len(X) * 0.8):]
+    y_val = y_val[int(len(y) * 0.8):]
     X = np.array(X, dtype=np.float16)
     y = np.array(y, dtype=np.int8)
     return {"X": X, "y": y, "X_train": X_train, "y_train": y_train, "X_val": X_val, "y_val": y_val}
@@ -221,6 +230,7 @@ def data_generator(X, y, batch_size):
             end = start + batch_size
             X_batch = X[start:end]
             y_batch = y[start:end]
+            np.divide(X_batch, 255.0, out=X_batch)
             yield X_batch, y_batch
 
 
@@ -365,16 +375,18 @@ if routine == "clock":
                        stderr=subprocess.DEVNULL)
 
         # Load and add the preprocessed image to the sequence
-        image = image_utils.load_img(path, target_size=(IMAGE_HEIGHT, IMAGE_WIDTH), color_mode="grayscale")
+        image = image_utils.load_img(path, color_mode="grayscale")
         image = image_utils.img_to_array(image) / 255.0
         image = image[:-21, :]
-        images.append(image)
+        resized = image_utils.array_to_img(image).resize((IMAGE_WIDTH, IMAGE_HEIGHT))
+        resized = image_utils.img_to_array(resized, dtype=np.float16) / 255.0
+        images.append(resized)
 
         # Start making predictions only after the sequence is full
         if len(images) < SEQUENCE_LENGTH:
             continue
 
-        X_loop = np.array([images], dtype=np.float16);
+        X_loop = np.array([images], dtype=np.float16)
         y_loop = model.predict(X_loop, verbose=0)
         y_loop_class = np.round(y_loop).flatten().astype(int)[0]
 
@@ -383,7 +395,7 @@ if routine == "clock":
         prediction = "Awake 🆙" if y_loop_class == 0 else "Sleep 💤"
         main_table.add_data(index, date, prediction, *[wandb.Image(_img) for _img in images])
 
-        if (index - 1) % SEQUENCE_LENGTH == 0:
+        if (index-1) % SEQUENCE_LENGTH == 0:
             temp_table = create_wandb_table()
             for data in main_table.data:
                 temp_table.add_data(*data)
