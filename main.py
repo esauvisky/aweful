@@ -34,9 +34,9 @@ from wandb.keras import WandbMetricsLogger, WandbModelCheckpoint
 
 # Define default hyperparameters
 SEQUENCE_LENGTH = 16
-IMAGE_HEIGHT = 480 // 10
-IMAGE_WIDTH = 640 // 10
-BATCH_SIZE = 32
+IMAGE_HEIGHT = 480 // 5
+IMAGE_WIDTH = 640 // 5
+BATCH_SIZE = 10
 EPOCHS = 50
 LEARNING_RATE = 1e-4
 PATIENCE = 5
@@ -77,24 +77,24 @@ class CustomBatchEndCallback(Callback):
         self.y = y
         self.reset_test_table()
 
-    def on_train_batch_end(self, batch, logs=None):
-        super().on_train_batch_end(batch, logs)
-        if batch % 10 == 0:
+    def on_train_batch_end(self, batch_ix, logs=None):
+        super().on_train_batch_end(batch_ix, logs)
+        if batch_ix % 10 == 0:
             # Get the X value (array of images) for the first sample in the batch
-            X_step = self.X[batch * BATCH_SIZE]
-            y_step = "Sleep" if self.y[batch * BATCH_SIZE] == 1 else "Awake"
+            X_step = self.X[batch_ix * BATCH_SIZE]
+            y_step = "Sleep" if self.y[batch_ix * BATCH_SIZE] == 1 else "Awake"
 
             # create a table with each image of the sequence
             images = []
             for sequence_ix, _img in enumerate(X_step):
-                # image is the same as self.x_train[batch * BATCH_SIZE + ix][0]
-                img = wandb.Image(_img, caption=f"Image {batch*BATCH_SIZE + sequence_ix} - Label: {y_step}")
+                # image is the same as self.x_train[batch_ix * BATCH_SIZE + ix][0]
+                img = wandb.Image(_img, caption=f"Image {batch_ix*BATCH_SIZE + sequence_ix} - Label: {y_step}")
                 images.append(img)
 
             # Adds the row to the table with the actual index of the first image of the sequence,
             # the original label y, and the images
-            self.test_table.add_data(batch * BATCH_SIZE, y_step, *images)
-            print(f" | Samples {batch*BATCH_SIZE}-{batch*BATCH_SIZE + SEQUENCE_LENGTH - 1} - Label: {y_step})'")
+            self.test_table.add_data(batch_ix * BATCH_SIZE, y_step, *images)
+            print(f" | Samples {batch_ix*BATCH_SIZE}-{batch_ix*BATCH_SIZE + SEQUENCE_LENGTH - 1} - Label: {y_step})'")
 
     def reset_test_table(self):
         columns = ['Index', 'Prediction']
@@ -108,18 +108,40 @@ class CustomBatchEndCallback(Callback):
         super().on_epoch_end(epoch, logs)
 
 
+def get_random_crop(image, seed=None):
+    if seed:
+        np.random.seed(seed)
+
+    height, width = image.shape[0], image.shape[1]
+    aspect_ratio = float(width) / float(height)
+
+    if width > height:
+        new_width = np.random.randint(int(width * 0.8), width)
+        new_height = int(new_width / aspect_ratio)
+    else:
+        new_height = np.random.randint(int(height * 0.8), height)
+        new_width = int(new_height * aspect_ratio)
+
+    x = np.random.randint(0, width - new_width)
+    y = np.random.randint(0, height - new_height)
+
+    crop = image[y:y + new_height, x:x + new_width]
+    resized_crop = image_utils.array_to_img(crop).resize((width, height))
+    resized_crop = image_utils.img_to_array(resized_crop)
+    return resized_crop
+
+
 def load_data(images_path, seq_length, image_height, image_width):
     X, y = [], []
     images = []
     labels = []
     X_aug = []
     y_aug = []
-    datagen = ImageDataGenerator(width_shift_range=0.2, height_shift_range=0.2)
+    # datagen = ImageDataGenerator(width_shift_range=0.2, height_shift_range=0.2)
 
     for file in tqdm(sorted(os.listdir(images_path), key=lambda x: int(x.split(".")[0].split("-")[0])), total=len(os.listdir(images_path))): # yapf: disable
-        if len(X) % (seq_length*10) == 0:
-            logger.info(f"Loaded {len(X)} samples. Restarting augmentation seed.")
-            seed = random.randint(0, 1000)
+        # if (len(X) - seq_length) % (seq_length*10) == 0:
+        #     logger.info(f"Loaded {len(X)} samples. Restarting augmentation seed.")
         if file.endswith(".jpg"):
             logger.debug(f"Loading {file}")
             image = image_utils.load_img(
@@ -139,10 +161,12 @@ def load_data(images_path, seq_length, image_height, image_width):
 
             # Augmentation
             augmented_images = []
+            seed = random.randint(0, 1000)
             for image in images:
                 # for _ in range(1):
-                transformed = datagen.random_transform(image, seed=seed)
-                augmented_images.append(transformed)
+                # transformed = datagen.random_transform(image, seed=seed)
+                cropped = get_random_crop(image, seed=seed)
+                augmented_images.append(cropped)
 
             X_aug.append(np.array(augmented_images))
             y_aug.append(labels[-1])
@@ -153,8 +177,8 @@ def load_data(images_path, seq_length, image_height, image_width):
         if len(images) > seq_length:
             images.pop(0)
             labels.pop(0)
-    X = np.array(X)
-    y = np.array(y)
+    X = np.array(X, dtype=np.float16)
+    y = np.array(y, dtype=np.int8)
     X_aug = np.array(X_aug)
     y_aug = np.array(y_aug)
     X = np.concatenate((X, X_aug), axis=0)
@@ -175,10 +199,10 @@ def prepare_data():
     indices = np.random.permutation(len(X)).tolist()
     X_train, y_train = X[indices], y[indices]
     X_val, y_val = X[indices], y[indices]
-    X_train = X_train[:int(len(X) * 0.95)]
-    y_train = y_train[:int(len(y) * 0.95)]
-    X_val = X_val[int(len(X) * 0.95):]
-    y_val = y_val[int(len(y) * 0.95):]
+    X_train = X_train[:int(len(X) * 0.9)]
+    y_train = y_train[:int(len(y) * 0.9)]
+    X_val = X_val[int(len(X) * 0.9):]
+    y_val = y_val[int(len(y) * 0.9):]
     return {"X": X, "y": y, "X_train": X_train, "y_train": y_train, "X_val": X_val, "y_val": y_val}
 
 
@@ -246,7 +270,7 @@ if routine == "train":
     with tf.device("CPU"):
         train_dataset = tf.data.Dataset.from_generator(generator=data_generator,
                                                        args=(X_train, y_train, BATCH_SIZE),
-                                                       output_types=(tf.float16, tf.int16),
+                                                       output_types=(tf.float16, tf.int8),
                                                        output_shapes=(
                                                            (BATCH_SIZE, SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1),
                                                            (BATCH_SIZE,),
@@ -254,11 +278,15 @@ if routine == "train":
 
         val_dataset = tf.data.Dataset.from_generator(generator=data_generator,
                                                      args=(X_val, y_val, BATCH_SIZE),
-                                                     output_types=(tf.float16, tf.int16),
+                                                     output_types=(tf.float16, tf.int8),
                                                      output_shapes=(
                                                          (BATCH_SIZE, SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1),
                                                          (BATCH_SIZE,),
                                                      )).prefetch(tf.data.experimental.AUTOTUNE)
+
+    # Compute the number of steps per epoch
+    steps_per_epoch = len(X_train) // BATCH_SIZE
+    validation_steps = len(X_val) // BATCH_SIZE
 
     callbacks = [
         CustomBatchEndCallback(X, y),
@@ -267,13 +295,11 @@ if routine == "train":
                       log_batch_frequency=10,
                       log_evaluation_frequency=10,
                       log_weights_frequency=10,
+                      validation_data=val_dataset,
+                      validation_steps=validation_steps,
                       save_model=False),
         EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True),
         ModelCheckpoint(FILENAME, monitor="val_loss", save_best_only=True, verbose=1)]
-
-    # Compute the number of steps per epoch
-    steps_per_epoch = len(X_train) // BATCH_SIZE
-    validation_steps = len(X_val) // BATCH_SIZE
 
     model.fit(
         train_dataset,
@@ -300,7 +326,7 @@ if routine == "train":
     # with tf.device("CPU"):
     #     X_predict = tf.data.Dataset.from_generator(generator=data_generator,
     #                                                args=(X, y, BATCH_SIZE),
-    #                                                output_types=(tf.float16, tf.int16),
+    #                                                output_types=(tf.float16, tf.int8),
     #                                                output_shapes=(
     #                                                    (BATCH_SIZE, SEQUENCE_LENGTH, IMAGE, IMAGE_WIDTH, 1),
     #                                                    (BATCH_SIZE,),
@@ -351,9 +377,9 @@ if routine == "clock":
         y_loop_class = (y_loop[0][0] > 0.5).astype(int)
 
         # Send data to wandb
-        if l % 20 == 0:
+        if l % SEQUENCE_LENGTH == 0:
             date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            prediction = "🆙" if y_loop_class == 0 else "💤"
+            prediction = "Awake 🆙" if y_loop_class == 0 else "Sleep 💤"
             test_table.add_data(date, prediction, *[wandb.Image(_img) for _img in images])
             wandb.log({"data": test_table}, commit=True)
 
