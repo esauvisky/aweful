@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import datetime
-from math import ceil
+from math import ceil, floor
 import os
 import random
 import shlex
@@ -81,7 +81,7 @@ class CustomBatchEndCallback(Callback):
 
     def on_train_batch_end(self, batch_ix, logs=None):
         super().on_train_batch_end(batch_ix, logs)
-        if batch_ix % 10 == 0:
+        if batch_ix % random.randrange(8, 15) == 0:
             # Get the X value (array of images) for the first sample in the batch
             X_step = self.X[batch_ix * BATCH_SIZE]
             y_step = "Sleep" if self.y[batch_ix * BATCH_SIZE] == 1 else "Awake"
@@ -113,10 +113,10 @@ def get_random_crop(image, seed=None):
     aspect_ratio = float(width) / float(height)
 
     if width > height:
-        new_width = np.random.randint(int(width * 0.8), width)
+        new_width = np.random.randint(int(width * 0.7), width)
         new_height = int(new_width / aspect_ratio)
     else:
-        new_height = np.random.randint(int(height * 0.8), height)
+        new_height = np.random.randint(int(height * 0.7), height)
         new_width = int(new_height * aspect_ratio)
 
     x = np.random.randint(0, width - new_width)
@@ -190,21 +190,22 @@ def data_generator(X, y, batch_size):
     num_samples = len(X)
     datagen = ImageDataGenerator(rotation_range=10)
 
-    half_batch_size = ceil(batch_size / 2)
+    real_batch_size = ceil(batch_size / 2)
+    augmented_batch_size = floor(batch_size / 2)
     while True:
         # Generate batches of data
-        for start in range(0, num_samples, half_batch_size):
-            if start + half_batch_size > num_samples:
+        for start in range(0, num_samples, real_batch_size):
+            if start + real_batch_size > num_samples:
                 break
-            end = start + half_batch_size
+            end = start + real_batch_size
             X_batch = X[start:end]
             y_batch = y[start:end]
             seed = random.randint(0, 1000)
 
             # Data augmentation
             X_batch_aug = []
-            for c, image_sequence in enumerate(X_batch):
-                if c >= batch_size - half_batch_size: break
+            for i in range(augmented_batch_size):
+                image_sequence = X_batch[i]
                 augmented_sequence = []
                 for image in image_sequence:
                     transformed = datagen.random_transform(image, seed=seed)
@@ -212,14 +213,18 @@ def data_generator(X, y, batch_size):
                     augmented_sequence.append(cropped)
                 X_batch_aug.append(augmented_sequence)
 
-            X_batch_aug = np.array(X_batch_aug)
-            np.divide(X_batch, 255.0, out=X_batch, casting="unsafe")
-            np.divide(X_batch_aug, 255.0, out=X_batch_aug, casting="unsafe")
-            X_batch = np.concatenate((X_batch, X_batch_aug), axis=0)
-            y_batch = np.concatenate((y_batch, y_batch), axis=0)
-            X_batch = X_batch.astype(np.float16)
-            y_batch = y_batch.astype(np.int8)
-            yield X_batch, y_batch
+            X_batch_aug = cp.array(X_batch_aug)
+            X_batch = cp.array(X_batch)
+            y_batch = cp.array(y_batch)
+            cp.divide(X_batch, 255.0, out=X_batch, casting="unsafe")
+            cp.divide(X_batch_aug, 255.0, out=X_batch_aug, casting="unsafe")
+            X_batch = cp.concatenate((X_batch, X_batch_aug), axis=0)
+            y_batch = cp.concatenate((y_batch, y_batch), axis=0)
+            X_batch = X_batch.astype(cp.float16)
+            y_batch = y_batch.astype(cp.int8)
+            # X_batch = cp.asnumpy(X_batch)
+            # y_batch = cp.asnumpy(y_batch)
+            yield X_batch.get(), y_batch.get()
 
 
 def set_mixed_precision():
@@ -257,7 +262,8 @@ wandb.init(project=f"aweful-{routine}",
                "batch_size": BATCH_SIZE,})
 
 set_mixed_precision()
-X, y = load_data("./data", SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH)
+with tf.device("GPU"):
+    X, y = load_data("./data", SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH)
 
 # Split the data
 indices = np.random.permutation(len(X)).tolist()
@@ -289,27 +295,27 @@ if routine == "train":
     steps_per_epoch = len(X_train) // BATCH_SIZE
     validation_steps = len(X_val) // BATCH_SIZE
 
-    callbacks = [
-        CustomBatchEndCallback(X, y),
-        WandbCallback(log_weights=True,
-                      log_evaluation=True,
-                      log_batch_frequency=10,
-                      log_evaluation_frequency=10,
-                      log_weights_frequency=10,
-                      validation_data=val_dataset,
-                      validation_steps=validation_steps,
-                      save_model=False),
-        EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True),
-        ModelCheckpoint(FILENAME, monitor="val_loss", save_best_only=True, verbose=1)]
+    with tf.device("GPU"):
+        callbacks = [
+            CustomBatchEndCallback(X, y),
+            WandbCallback(log_weights=True,
+                          log_evaluation=True,
+                          log_batch_frequency=10,
+                          log_evaluation_frequency=10,
+                          log_weights_frequency=10,
+                          # validation_steps=validation_steps, # this will cause fitting to hang!
+                          save_model=False),
+            EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True),
+            ModelCheckpoint(FILENAME, monitor="val_loss", save_best_only=True, verbose=1)]
 
-    model.fit(
-        train_dataset,
-        epochs=EPOCHS,
-        callbacks=callbacks,
-        steps_per_epoch=steps_per_epoch,
-        validation_data=val_dataset,
-        validation_steps=validation_steps,
-    )
+        model.fit(
+            train_dataset,
+            epochs=EPOCHS,
+            callbacks=callbacks,
+            steps_per_epoch=steps_per_epoch,
+            validation_data=val_dataset,
+            validation_steps=validation_steps,
+        )
     logger.info("Finished training")
 
     # Save the model weights
