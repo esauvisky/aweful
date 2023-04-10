@@ -10,11 +10,11 @@ import shlex
 import subprocess
 import sys
 from collections import deque
-import cv2
+from concurrent.futures import (ProcessPoolExecutor, ThreadPoolExecutor, as_completed)
 
-from concurrent.futures import ProcessPoolExecutor, as_completed, ThreadPoolExecutor
-import numpy as np
 import cupy as cp
+import cv2
+import numpy as np
 import tensorflow as tf
 from keras import mixed_precision
 from keras.callbacks import Callback, EarlyStopping, ModelCheckpoint
