@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 
 import datetime
-from math import ceil, floor
 import os
+from math import ceil, floor
+
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import random
 import shlex
 import subprocess
@@ -15,8 +17,8 @@ import numpy as np
 import cupy as cp
 import tensorflow as tf
 from keras import mixed_precision
-from keras.callbacks import (Callback, EarlyStopping, ModelCheckpoint)
-from keras.layers import (ConvLSTM2D, Dense, Flatten, Input, MaxPooling3D)
+from keras.callbacks import Callback, EarlyStopping, ModelCheckpoint
+from keras.layers import ConvLSTM2D, Dense, Flatten, Input, MaxPooling3D
 from keras.models import Model
 from keras.optimizers import Adam
 from keras.preprocessing.image import ImageDataGenerator, image_utils
