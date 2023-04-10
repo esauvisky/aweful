@@ -3,6 +3,7 @@
 import datetime
 import os
 from math import ceil, floor
+import shutil
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import random
@@ -264,12 +265,12 @@ def main():
     if routine == "train":
         # # start a new wandb run to track this script
         wandb.init(project=f"aweful-{routine}",
-                   config={
-                       "optimizer": "adam",
-                       "loss": "binary_crossentropy",
-                       "metric": "accuracy",
-                       "epoch": EPOCHS,
-                       "batch_size": BATCH_SIZE,})
+                config={
+                    "optimizer": "adam",
+                    "loss": "binary_crossentropy",
+                    "metric": "accuracy",
+                    "epoch": EPOCHS,
+                    "batch_size": BATCH_SIZE,})
 
         with tf.device("GPU"):
             X, y = load_data("./data", SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH)
@@ -290,10 +291,6 @@ def main():
     # Compile the model
     optimizer = Adam(learning_rate=LEARNING_RATE)
     model.compile(loss="binary_crossentropy", optimizer=optimizer, metrics=["accuracy"])
-
-    if os.path.exists(FILENAME):
-        model.load_weights(FILENAME)
-        logger.success(f"Loaded model weights from {FILENAME}")
 
     if routine == "train":
         with tf.device("CPU"):
@@ -340,39 +337,52 @@ def main():
         logger.info("\nClassification report:\n" + str(classification_report(y_val, y_pred_classes)))
         wandb.finish()
 
-        for i in range(0, len(X), BATCH_SIZE):
-            X_predict = X[i:i + BATCH_SIZE]
-            y_predict = y[i:i + BATCH_SIZE]
-            y_out = model.predict(X_predict, verbose=0)
-            y_out = np.round(y_out).flatten().astype(int)
-            for n, cat in enumerate(y_out):
-                prediction = "🆙" if cat == 0 else "💤"
-                if y_predict[n] != cat: color = "\033[91m"
-                else: color = "\033[92m" if cat == 0 else "\033[93m"
-                print(color + f"{i:05d}:" + str(prediction) + "\033[0m", end=" | ")
-
     if routine == "clock":
+        if os.path.exists(FILENAME):
+            model.load_weights(FILENAME)
+            logger.success(f"Loaded model weights from {FILENAME}")
+        else:
+            logger.error(f"Could not find file '{FILENAME}'")
+            return
+
+        # for i in range(0, len(X), BATCH_SIZE):
+        #     X_predict = X[i:i + BATCH_SIZE]
+        #     y_predict = y[i:i + BATCH_SIZE]
+        #     y_out = model.predict(X_predict, verbose=0)
+        #     y_out = np.round(y_out).flatten().astype(int)
+        #     for n, cat in enumerate(y_out):
+        #         prediction = "🆙" if cat == 0 else "💤"
+        #         if y_predict[n] != cat: color = "\033[91m"
+        #         else: color = "\033[92m" if cat == 0 else "\033[93m"
+        #         print(color + f"{i:05d}:" + str(prediction) + "\033[0m", end=" | ")
+
+        if os.path.exists(FILENAME):
+            model.load_weights(FILENAME)
+            logger.success(f"Loaded model weights from {FILENAME}")
+        else:
+            logger.error(f"Could not find file '{FILENAME}'")
+            return
+
         index = 0
         # get the latest used index number
-        for filename in os.listdir("./data"):
-            if filename.endswith(".jpg"):
-                num = int(filename.split(".")[0].split("-")[0])
-                if num >= index:
-                    index = num + 1
+        for group in os.listdir("./data"):
+            for filename in os.listdir("./data/" + group):
+                if filename.endswith(".jpg"):
+                    num = int(filename.split(".")[0].split("-")[0])
+                    if num >= index:
+                        index = num + 1
 
         sleep_counter = deque(maxlen=6 * 60)
         images = deque(maxlen=SEQUENCE_LENGTH)
-
-        path = "./new_data/"
+        path = f"./data/{group + 1}/"
 
         while True:
-            index += 1
-            subprocess.run(shlex.split(f"fswebcam {path}{index}.jpg -d /dev/video0 -S2 -F1"),
+            subprocess.run(shlex.split(f"fswebcam /tmp/aweful_tmp.jpg -d /dev/video0 -S2 -F1"),
                            check=False,
                            stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL)
 
-            image = get_image(f"{path}{index}.jpg", IMAGE_HEIGHT, IMAGE_WIDTH)
+            image = get_image(f"/tmp/aweful_tmp.jpg", IMAGE_HEIGHT, IMAGE_WIDTH)
             images.append(image)
             # # image = image_utils.load_img(f"{path}{index}.jpg", color_mode="grayscale")
             # # image = image_utils.img_to_array(image)
@@ -400,6 +410,10 @@ def main():
             else:
                 sleep_counter.append(0)
                 logger.info(f"No sleep detected {sleep_counter.count(1)} / {len(sleep_counter)}")
+
+            index += 1
+            # copy the image to the data folder
+            shutil.copy("/tmp/aweful_tmp.jpg", f'{path}{index}-{"awake" if y_loop_class == 0 else "sleep"}.jpg')
 
             if sleep_counter.count(1) > 0.8 * 6 * 60:
                 print("Wake up! You've been sleeping for more than 6 hours!")
