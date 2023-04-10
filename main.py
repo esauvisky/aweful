@@ -67,10 +67,15 @@ def create_model(input_shape):
     return out_model
 
 
-def create_wandb_table():
+def create_wandb_images_table():
     columns = ['Index', 'Date', 'Prediction']
     for s in range(SEQUENCE_LENGTH):
         columns.append(f'Sample {s + 1}')
+    return wandb.Table(columns=columns, allow_mixed_types=True)
+
+
+def create_wandb_predictions_table():
+    columns = ['Index', 'Date', 'Prediction']
     return wandb.Table(columns=columns, allow_mixed_types=True)
 
 
@@ -79,31 +84,31 @@ class CustomBatchEndCallback(Callback):
         super().__init__(**kwargs)
         self.X = X
         self.y = y
-        self.test_table = create_wandb_table()
+        self.test_table = create_wandb_images_table()
 
     def on_train_batch_end(self, batch_ix, logs=None):
         super().on_train_batch_end(batch_ix, logs)
         if batch_ix % random.randrange(8, 15) == 0:
             # Get the X value (array of images) for the first sample in the batch
-            X_step = self.X[batch_ix * BATCH_SIZE]
-            y_step = "Sleep" if self.y[batch_ix * BATCH_SIZE] == 1 else "Awake"
+            X_step = self.X[batch * BATCH_SIZE]
+            y_step = "Sleep" if self.y[batch * BATCH_SIZE] == 1 else "Awake"
 
             # create a table with each image of the sequence
             images = []
             for sequence_ix, _img in enumerate(X_step):
                 # image is the same as self.x_train[batch_ix * BATCH_SIZE + ix][0]
-                img = wandb.Image(_img, caption=f"Image {batch_ix * BATCH_SIZE + sequence_ix} - Label: {y_step}")
+                img = wandb.Image(_img, caption=f"Image {batch * BATCH_SIZE + sequence_ix} - Label: {y_step}")
                 images.append(img)
 
             # Adds the row to the table with the actual index of the first image of the sequence,
             # the original label y, and the images
             date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            self.test_table.add_data(batch_ix * BATCH_SIZE, date, y_step, *images)
-            print(f" | Samples {batch_ix * BATCH_SIZE}-{batch_ix * BATCH_SIZE + SEQUENCE_LENGTH - 1} - Label: {y_step})'")
+            self.test_table.add_data(batch * BATCH_SIZE, date, y_step, *images)
+            print(f" | Samples {batch * BATCH_SIZE}-{batch * BATCH_SIZE + SEQUENCE_LENGTH - 1} - Label: {y_step})'")
 
     def on_epoch_end(self, epoch, logs=None):
         wandb.log({"data": self.test_table}, commit=True)
-        self.test_table = create_wandb_table()
+        self.test_table = create_wandb_images_table()
         super().on_epoch_end(epoch, logs)
 
 
@@ -245,152 +250,163 @@ def get_generator(generator, X, y):
                                           )).prefetch(tf.data.experimental.AUTOTUNE)
 
 
-if len(sys.argv) >= 2 and sys.argv[1] == "train":
-    sys.argv.pop(1)
-    routine = "train"
-else:
-    routine = "clock"
+def main():
+    if len(sys.argv) >= 2 and sys.argv[1] == "train":
+        sys.argv.pop(1)
+        routine = "train"
+    else:
+        routine = "clock"
 
-setup_logging("DEBUG" if DEBUG else "INFO")
-logger.info(f"Num GPUs Available: {len(tf.config.list_physical_devices('GPU'))}")
+    setup_logging("DEBUG" if DEBUG else "INFO")
+    logger.info(f"Num GPUs Available: {len(tf.config.list_physical_devices('GPU'))}")
+    set_mixed_precision()
 
-# start a new wandb run to track this script
-wandb.init(project=f"aweful-{routine}",
-           config={
-               "optimizer": "adam",
-               "loss": "binary_crossentropy",
-               "metric": "accuracy",
-               "epoch": EPOCHS,
-               "batch_size": BATCH_SIZE,})
+    if routine == "train":
+        # # start a new wandb run to track this script
+        wandb.init(project=f"aweful-{routine}",
+                   config={
+                       "optimizer": "adam",
+                       "loss": "binary_crossentropy",
+                       "metric": "accuracy",
+                       "epoch": EPOCHS,
+                       "batch_size": BATCH_SIZE,})
 
-set_mixed_precision()
-with tf.device("GPU"):
-    X, y = load_data("./data", SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH)
+        with tf.device("GPU"):
+            X, y = load_data("./data", SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH)
 
-# Split the data
-indices = np.random.permutation(len(X)).tolist()
-X_train, y_train = X[indices], y[indices]
-X_val, y_val = X[indices], y[indices]
-X_train = X_train[:int(len(X) * 0.8)]
-y_train = y_train[:int(len(y) * 0.8)]
-X_val = X_val[int(len(X) * 0.8):]
-y_val = y_val[int(len(y) * 0.8):]
+        # Split the data
+        indices = np.random.permutation(len(X)).tolist()
+        X_train, y_train = X[indices], y[indices]
+        X_val, y_val = X[indices], y[indices]
+        X_train = X_train[:int(len(X) * 0.8)]
+        y_train = y_train[:int(len(y) * 0.8)]
+        X_val = X_val[int(len(X) * 0.8):]
+        y_val = y_val[int(len(y) * 0.8):]
 
-# Create the ConvLSTM model
-input_shape = (SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1)
-model = create_model(input_shape)
+    # Create the ConvLSTM model
+    input_shape = (SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1)
+    model = create_model(input_shape)
 
-# Compile the model
-optimizer = Adam(learning_rate=LEARNING_RATE)
-model.compile(loss="binary_crossentropy", optimizer=optimizer, metrics=["accuracy"])
+    # Compile the model
+    optimizer = Adam(learning_rate=LEARNING_RATE)
+    model.compile(loss="binary_crossentropy", optimizer=optimizer, metrics=["accuracy"])
 
-# if os.path.exists(FILENAME):
-#     model.load_weights(FILENAME)
-#     logger.success(f"Loaded model weights from {FILENAME}")
+    if os.path.exists(FILENAME):
+        model.load_weights(FILENAME)
+        logger.success(f"Loaded model weights from {FILENAME}")
 
-if routine == "train":
-    with tf.device("CPU"):
-        train_dataset = get_generator(data_generator, X_train, y_train)
-        val_dataset = get_generator(data_generator, X_val, y_val)
+    if routine == "train":
+        with tf.device("CPU"):
+            train_dataset = get_generator(data_generator, X_train, y_train)
+            val_dataset = get_generator(data_generator, X_val, y_val)
 
-    # Compute the number of steps per epoch
-    steps_per_epoch = len(X_train) // BATCH_SIZE
-    validation_steps = len(X_val) // BATCH_SIZE
+        # Compute the number of steps per epoch
+        steps_per_epoch = len(X_train) // BATCH_SIZE
+        validation_steps = len(X_val) // BATCH_SIZE
 
-    with tf.device("GPU"):
-        callbacks = [
-            CustomBatchEndCallback(X, y),
-            WandbCallback(log_weights=True,
-                          log_evaluation=True,
-                          log_batch_frequency=10,
-                          log_evaluation_frequency=10,
-                          log_weights_frequency=10,
-                          # validation_steps=validation_steps, # this will cause fitting to hang!
-                          save_model=False),
-            EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True),
-            ModelCheckpoint(FILENAME, monitor="val_loss", save_best_only=True, verbose=1)]
+        with tf.device("GPU"):
+            callbacks = [
+                CustomBatchEndCallback(X, y),
+                WandbCallback(
+                    log_weights=True,
+                    log_evaluation=True,
+                    log_batch_frequency=10,
+                    log_evaluation_frequency=10,
+                    log_weights_frequency=10,
+                                                                                          # validation_steps=validation_steps, # this will cause fitting to hang!
+                    save_model=False),
+                EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True),
+                ModelCheckpoint(FILENAME, monitor="val_loss", save_best_only=True, verbose=1)]
 
-        model.fit(
-            train_dataset,
-            epochs=EPOCHS,
-            callbacks=callbacks,
-            steps_per_epoch=steps_per_epoch,
-            validation_data=val_dataset,
-            validation_steps=validation_steps,
-        )
-    logger.info("Finished training")
+            model.fit(
+                train_dataset,
+                epochs=EPOCHS,
+                callbacks=callbacks,
+                steps_per_epoch=steps_per_epoch,
+                validation_data=val_dataset,
+                validation_steps=validation_steps,
+            )
+        logger.info("Finished training")
 
-    # Save the model weights
-    model.save_weights(FILENAME)
+        # Save the model weights
+        model.save_weights(FILENAME)
 
-    # Make predictions on the test set
-    y_pred = model.predict(X_val)
-    y_pred_classes = np.round(y_pred)
+        # Make predictions on the test set
+        y_pred = model.predict(X_val)
+        y_pred_classes = np.round(y_pred)
 
-    # Evaluate the model performance
-    logger.info("\nConfusion matrix:\n" + str(confusion_matrix(y_val, y_pred_classes)))
-    logger.info("\nClassification report:\n" + str(classification_report(y_val, y_pred_classes)))
+        # Evaluate the model performance
+        logger.info("\nConfusion matrix:\n" + str(confusion_matrix(y_val, y_pred_classes)))
+        logger.info("\nClassification report:\n" + str(classification_report(y_val, y_pred_classes)))
+        wandb.finish()
 
-# for i in range(0, len(X), BATCH_SIZE):
-#     X_predict = X[i:i + BATCH_SIZE]
-#     y_predict = y[i:i + BATCH_SIZE]
-#     y_out = model.predict(X_predict, verbose=0)
-#     y_out = np.round(y_out).flatten().astype(int)
-#     for n, cat in enumerate(y_out):
-#         prediction = "🆙" if cat == 0 else "💤"
-#         if y_predict[n] != cat: color = "\033[91m"
-#         else: color = "\033[92m" if cat == 0 else "\033[93m"
-#         print(color + f"{i:05d}:" + str(prediction) + "\033[0m", end=" | ")
+        for i in range(0, len(X), BATCH_SIZE):
+            X_predict = X[i:i + BATCH_SIZE]
+            y_predict = y[i:i + BATCH_SIZE]
+            y_out = model.predict(X_predict, verbose=0)
+            y_out = np.round(y_out).flatten().astype(int)
+            for n, cat in enumerate(y_out):
+                prediction = "🆙" if cat == 0 else "💤"
+                if y_predict[n] != cat: color = "\033[91m"
+                else: color = "\033[92m" if cat == 0 else "\033[93m"
+                print(color + f"{i:05d}:" + str(prediction) + "\033[0m", end=" | ")
 
-if routine == "clock":
-    sleep_counter = deque(maxlen=6 * 60)
-    images = deque(maxlen=SEQUENCE_LENGTH)
-    path = "/tmp/image.jpg"
+    if routine == "clock":
+        index = 0
+        # get the latest used index number
+        for filename in os.listdir("./data"):
+            if filename.endswith(".jpg"):
+                num = int(filename.split(".")[0].split("-")[0])
+                if num >= index:
+                    index = num + 1
 
-    main_table = create_wandb_table()
-    index = 0
-    while True:
-        index += 1
-        subprocess.run(shlex.split(f"fswebcam {path} -d /dev/video0 -S2 -F1"),
-                       check=False,
-                       stdout=subprocess.DEVNULL,
-                       stderr=subprocess.DEVNULL)
+        sleep_counter = deque(maxlen=6 * 60)
+        images = deque(maxlen=SEQUENCE_LENGTH)
 
-        image = image_utils.load_img(path, color_mode="grayscale")
-        image = image_utils.img_to_array(image) / 255.0
-        image = image[:-21, :]
-        resized = image_utils.array_to_img(image).resize((IMAGE_WIDTH, IMAGE_HEIGHT))
-        resized = image_utils.img_to_array(resized, dtype=np.float16) / 255.0
-        images.append(resized)
+        path = "./new_data/"
 
-        if len(images) < SEQUENCE_LENGTH:
-            continue
+        while True:
+            index += 1
+            subprocess.run(shlex.split(f"fswebcam {path}{index}.jpg -d /dev/video0 -S2 -F1"),
+                           check=False,
+                           stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
 
-        X_loop = np.array([images], dtype=np.float16)
-        y_loop = model.predict(X_loop, verbose=0)
-        y_loop_class = np.round(y_loop).flatten().astype(int)[0]
+            image = get_image(f"{path}{index}.jpg", IMAGE_HEIGHT, IMAGE_WIDTH)
+            images.append(image)
+            # # image = image_utils.load_img(f"{path}{index}.jpg", color_mode="grayscale")
+            # # image = image_utils.img_to_array(image)
+            # # image = image[:-21, :]
 
-        date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        prediction = "Awake 🆙" if y_loop_class == 0 else "Sleep 💤"
-        main_table.add_data(index, date, prediction, *[wandb.Image(_img) for _img in images])
+            # resized = image_utils.array_to_img(image).resize((IMAGE_WIDTH, IMAGE_HEIGHT))
+            # resized = image_utils.img_to_array(resized, dtype=np.float16) / 255.0
+            # images.append(resized)
 
-        if (index-1) % SEQUENCE_LENGTH == 0:
-            temp_table = create_wandb_table()
-            for data in main_table.data:
-                temp_table.add_data(*data)
-            wandb.log({"main_table": temp_table})
+            if len(images) < SEQUENCE_LENGTH:
+                # sleep_counter.append(0)
+                # logger.info(f"No sleep detected {sleep_counter.count(1)} / {len(sleep_counter)}")
+                continue
 
-        if y_loop_class == 1:
-            sleep_counter.append(1)
-            logger.warning("Sleep detected")
-        else:
-            sleep_counter.append(0)
-            logger.info("No sleep detected")
+            X_loop = np.array([images], dtype=np.float16)
+            y_loop = model.predict(X_loop, verbose=0)
+            y_loop_class = np.round(y_loop).flatten().astype(int)[0]
 
-        if sleep_counter.count(1) > 0.8 * 6 * 60:
-            print("Wake up! You've been sleeping for more than 6 hours!")
-            alarm_triggered = True
-        else:
-            alarm_triggered = False
+            date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            prediction = "Awake 🆙" if y_loop_class == 0 else "Sleep 💤"
 
-wandb.finish()
+            if y_loop_class == 1:
+                sleep_counter.append(1)
+                logger.warning(f"Sleep detected {sleep_counter.count(1)} / {len(sleep_counter)}")
+            else:
+                sleep_counter.append(0)
+                logger.info(f"No sleep detected {sleep_counter.count(1)} / {len(sleep_counter)}")
+
+            if sleep_counter.count(1) > 0.8 * 6 * 60:
+                print("Wake up! You've been sleeping for more than 6 hours!")
+                alarm_triggered = True
+            else:
+                alarm_triggered = False
+
+
+if __name__ == "__main__":
+    main()
