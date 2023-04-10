@@ -86,9 +86,9 @@ class CustomBatchEndCallback(Callback):
         self.y = y
         self.test_table = create_wandb_images_table()
 
-    def on_train_batch_end(self, batch_ix, logs=None):
-        super().on_train_batch_end(batch_ix, logs)
-        if batch_ix % random.randrange(8, 15) == 0:
+    def on_train_batch_end(self, batch, logs=None):
+        super().on_train_batch_end(batch, logs)
+        if batch % random.randrange(8, 15) == 0:
             # Get the X value (array of images) for the first sample in the batch
             X_step = self.X[batch * BATCH_SIZE]
             y_step = "Sleep" if self.y[batch * BATCH_SIZE] == 1 else "Awake"
