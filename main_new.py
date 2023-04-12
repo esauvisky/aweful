@@ -63,21 +63,19 @@ def create_model(input_shape):
 def process_image_sequence(images):
     def process_image_file(image):
         # Load the image
-        image = tf.io.read_file(image)
-        image = tf.image.decode_image(image, channels=1, expand_animations=False)
+        image = cv2.imread(image, cv2.IMREAD_GRAYSCALE)
 
         # Crop the bottom 21 pixels
-        # cropped_image = tf.slice(image, [0, 0, 0], [image.shape[0] - 21, image.shape[1], -1])
-        cropped_image = tf.image.crop_to_bounding_box(image, 0, 0, image.shape[0] - 21, image.shape[1])
+        cropped_image = image[:-21, :]
 
         # Resize the image to the target dimensions
-        resized_image = tf.image.resize(cropped_image, [IMAGE_HEIGHT, IMAGE_WIDTH],
-                                        method=tf.image.ResizeMethod.BILINEAR)
+        resized_image = cv2.resize(cropped_image, (IMAGE_WIDTH, IMAGE_HEIGHT), interpolation=cv2.INTER_LINEAR)
+
         # Normalize the image
         normalized_image = resized_image / 255.0
 
-        # Cast the image to float16
-        normalized_image = tf.cast(normalized_image, tf.float16)
+        # Add a new dimension for the single channel
+        normalized_image = normalized_image[..., np.newaxis]
 
         return normalized_image
 

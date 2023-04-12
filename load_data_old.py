@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 import numpy as np
 
-import tqdm
+from tqdm import tqdm
 
 
 def get_image(image_path, image_height, image_width):
