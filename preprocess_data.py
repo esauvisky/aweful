@@ -6,10 +6,7 @@ import cv2
 import numpy as np
 from tqdm.auto import tqdm
 
-SEQUENCE_LENGTH = 16
-BATCH_SIZE = 8
-IMAGE_HEIGHT = 480 // 10
-IMAGE_WIDTH = 640 // 10
+from hyperparameters import SEQUENCE_LENGTH, BATCH_SIZE, IMAGE_HEIGHT, IMAGE_WIDTH, EPOCHS, LEARNING_RATE, PATIENCE, DEBUG, FILENAME
 
 
 def grouper(iterable, n, *, incomplete='ignore', fillvalue=None):
@@ -159,8 +156,8 @@ def save_data(input_dir, output_dir):
     sequences, labels = process_data(input_dir)
 
     # Save the data to disk
-    np.save(os.path.join(output_dir, "sequences.npy"), sequences)
-    np.save(os.path.join(output_dir, "labels.npy"), labels)
+    np.save(os.path.join(output_dir, input_dir.split("/")[-1] + "_sequences.npy"), sequences)
+    np.save(os.path.join(output_dir, input_dir.split("/")[-1] + "_labels.npy"), labels)
 
 
-save_data("./test/", "./preprocessed_data/")
+save_data("./data/raw", "./prep")

@@ -19,18 +19,7 @@ from wandb.keras import WandbCallback
 from preprocess_data import load_data
 from wandb_custom import CustomBatchEndCallback
 
-# Define default hyperparameters
-SEQUENCE_LENGTH = 16
-BATCH_SIZE = 8
-IMAGE_HEIGHT = 480 // 10
-IMAGE_WIDTH = 640 // 10
-
-EPOCHS = 20
-LEARNING_RATE = 1e-4
-PATIENCE = 5
-DEBUG = False
-FILENAME = f'weights-{SEQUENCE_LENGTH}_{IMAGE_HEIGHT}_{IMAGE_WIDTH}.h5'
-
+from hyperparameters import SEQUENCE_LENGTH, BATCH_SIZE, IMAGE_HEIGHT, IMAGE_WIDTH, EPOCHS, LEARNING_RATE, PATIENCE, DEBUG, FILENAME
 
 def setup_logging(level="DEBUG", show_module=False):
     """

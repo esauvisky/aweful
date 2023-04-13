@@ -3,7 +3,7 @@ import random
 
 import wandb
 from keras.callbacks import Callback
-
+from hyperparameters import SEQUENCE_LENGTH, BATCH_SIZE, IMAGE_HEIGHT, IMAGE_WIDTH, EPOCHS, LEARNING_RATE, PATIENCE, DEBUG, FILENAME
 
 def create_wandb_images_table():
     columns = ['Index', 'Date', 'Prediction']
