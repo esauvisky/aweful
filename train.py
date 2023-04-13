@@ -1,35 +1,30 @@
 #!/usr/bin/env python3
 
-import datetime
 import os
-from re import L
-from sklearn.metrics import classification_report, confusion_matrix
-from wandb_custom import CustomBatchEndCallback
-from sklearn.model_selection import train_test_split
-
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-import os
-import random
 import sys
 
-import cv2
 import numpy as np
 import tensorflow as tf
-from keras.callbacks import Callback, EarlyStopping, ModelCheckpoint
+import wandb
+from keras.callbacks import EarlyStopping, ModelCheckpoint
 from keras.layers import ConvLSTM2D, Dense, Flatten, Input, MaxPooling3D
 from keras.models import Model
 from keras.optimizers import Adam
 from loguru import logger
+from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.model_selection import train_test_split
 from wandb.keras import WandbCallback
 
-import wandb
 from preprocess_data import load_data
+from wandb_custom import CustomBatchEndCallback
 
 # Define default hyperparameters
 SEQUENCE_LENGTH = 16
-BATCH_SIZE = 4
+BATCH_SIZE = 8
 IMAGE_HEIGHT = 480 // 10
 IMAGE_WIDTH = 640 // 10
+
 EPOCHS = 20
 LEARNING_RATE = 1e-4
 PATIENCE = 5
@@ -60,27 +55,6 @@ def create_model(input_shape):
     out_model = Model(inputs=inputs, outputs=outputs)
     out_model.summary()
     return out_model
-
-
-def get_generator(inputs):
-    def generator():
-        for i in range(0, len(sequences), BATCH_SIZE):
-            if not i + BATCH_SIZE < len(sequences):
-                continue
-            batch_images = sequences[i:i + BATCH_SIZE]
-            batch_labels = labels[i:i + BATCH_SIZE]
-            yield batch_images, batch_labels
-
-    generator = tf.data.Dataset.from_generator(generator=generator,
-                                               output_types=(tf.float32, tf.int32),
-                                               output_shapes=(
-                                                   (BATCH_SIZE, SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1),
-                                                   (BATCH_SIZE,),
-                                               )).prefetch(tf.data.experimental.AUTOTUNE)
-
-    step_count = len(sequences) // BATCH_SIZE
-
-    return generator, step_count
 
 
 def main():
@@ -120,9 +94,9 @@ def main():
                 WandbCallback(
                     log_weights=True,
                     log_evaluation=True,
-                                                                                          #   log_gradients=True,
-                                                                                          #   training_data=(X_train, y_train),
-                                                                                          #   validation_data=(X_val, y_val),
+                                                                                              #   log_gradients=True,
+                                                                                              #   training_data=(X_train, y_train),
+                                                                                              #   validation_data=(X_val, y_val),
                     log_batch_frequency=10,
                     log_evaluation_frequency=10,
                     log_weights_frequency=10,
@@ -140,26 +114,6 @@ def main():
                       verbose=2,
                       use_multiprocessing=True,
                       workers=32)
-
-        # # train_dataset, steps_per_epoch = get_generator("./data/0/", "train")
-        # # val_dataset, validation_steps = get_generator("./data/0/", "val")
-        # train_dataset, steps_per_epoch = get_generator("./preprocessed_data/", "train")
-        # val_dataset, validation_steps = get_generator("./preprocessed_data/", "val")
-
-        # callbacks = [
-        #     WandbCallback(log_weights=True,
-        #                   log_evaluation=True,
-        #                   log_batch_frequency=10,
-        #                   log_evaluation_frequency=10,
-        #                   log_weights_frequency=10,
-        #                   save_model=False),
-        #     EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True),
-        #     ModelCheckpoint(FILENAME, monitor="val_loss", save_best_only=True, verbose=1)]
-
-        # model.fit(train_dataset,
-        #           epochs=EPOCHS,
-        #           callbacks=callbacks,
-        #           validation_data=val_dataset)
 
         # Make predictions on the test set
         y_pred = model.predict(X_val)

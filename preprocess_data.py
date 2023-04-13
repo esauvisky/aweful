@@ -1,15 +1,10 @@
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import zip_longest
-import itertools
-from tqdm.auto import tqdm
-import os
-import numpy as np
+
 import cv2
-from keras.preprocessing.image import ImageDataGenerator, image_utils
-
-import concurrent
-
-from load_data_old import process_image_sequence
+import numpy as np
+from tqdm.auto import tqdm
 
 SEQUENCE_LENGTH = 16
 BATCH_SIZE = 8
@@ -114,6 +109,7 @@ def process_image_sequence(image_files, images_path, image_height, image_width):
         augmented_sequence.append(augmented_image)
 
     return sequence, augmented_sequence, labels[-1]
+
 
 def process_data(input_path):
     X, y = [], []

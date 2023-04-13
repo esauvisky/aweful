@@ -4,40 +4,39 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
-
-
         {
-            "name": "train",
+            "name": "Train Model",
             "type": "python",
             "request": "launch",
-            "program": "main.py",
-            "args": ["train"],
+            "program": "train.py",
+            "args": ["/data/0"],
             "console": "integratedTerminal",
             "justMyCode": true
         },
+        // {
+        //     "name": "Train Model on /test",
+        //     "type": "python",
+        //     "request": "launch",
+        //     "program": "train.py",
+        //     "args": [
+        //         "/test"
+        //     ],
+        //     "console": "integratedTerminal",
+        //     "justMyCode": true
+        // },
         {
-            "name": "train2",
-            "type": "python",
-            "request": "launch",
-            "program": "main_new.py",
-            "args": ["train"],
-            "console": "integratedTerminal",
-            "justMyCode": true
-        },
-        {
-            "name": "preprocess",
+            "name": "Pre-Process Data",
             "type": "python",
             "request": "launch",
             "program": "preprocess_data.py",
-            "args": [""],
             "console": "integratedTerminal",
             "justMyCode": true
         },
         {
-            "name": "predict",
+            "name": "Run Alarm Clock",
             "type": "python",
             "request": "launch",
-            "program": "main.py",
+            "program": "clock.py",
             "console": "integratedTerminal",
             "justMyCode": true
         }
