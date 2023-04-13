@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import zip_longest
@@ -8,48 +10,27 @@ from tqdm.auto import tqdm
 
 from hyperparameters import SEQUENCE_LENGTH, BATCH_SIZE, IMAGE_HEIGHT, IMAGE_WIDTH, EPOCHS, LEARNING_RATE, PATIENCE, DEBUG, FILENAME
 
+def random_transform(image, seed):
+    rng = np.random.default_rng(seed)
+    angle = rng.uniform(-5, 5)
+    tx = rng.integers(-10, 11)
+    ty = rng.integers(-10, 11)
 
-def grouper(iterable, n, *, incomplete='ignore', fillvalue=None):
-    args = [iter(iterable)] * n
-    if incomplete == 'fill':
-        return zip_longest(*args, fillvalue=fillvalue)
-    if incomplete == 'strict':
-        return zip(*args, strict=True)
-    if incomplete == 'ignore':
-        return zip(*args)
-    else:
-        raise ValueError('Expected fill, strict, or ignore')
+    # Apply rotation
+    center = (image.shape[1] // 2, image.shape[0] // 2)
+    rotation_matrix = cv2.getRotationMatrix2D(center, angle, 1)
+    image = cv2.warpAffine(image, rotation_matrix, (image.shape[1], image.shape[0]))
 
+    # Apply translation
+    translation_matrix = np.float32([[1, 0, tx], [0, 1, ty]])
+    image = cv2.warpAffine(image, translation_matrix, (image.shape[1], image.shape[0]))
 
-def random_transform(images):
-    transformed_images = []
+    image = np.expand_dims(image, axis=-1)
+    return image
 
-    # Generate random parameters for rotation, translation, and scaling
-    angle = np.random.uniform(-5, 5)
-    tx = np.random.randint(-10, 11)
-    ty = np.random.randint(-10, 11)
-
-    for image in images:
-        # Apply rotation
-        center = (image.shape[1] // 2, image.shape[0] // 2)
-        rotation_matrix = cv2.getRotationMatrix2D(center, angle, 1)
-        rotated_image = cv2.warpAffine(image, rotation_matrix, (image.shape[1], image.shape[0]))
-
-        # Apply translation
-        translation_matrix = np.float32([[1, 0, tx], [0, 1, ty]])
-        translated_image = cv2.warpAffine(rotated_image, translation_matrix, (image.shape[1], image.shape[0]))
-
-        # Add a new dimension for the single channel
-        translated_image = np.expand_dims(translated_image, axis=-1) # Add an extra channel dimension
-
-        transformed_images.append(translated_image)
-
-    return transformed_images
-
-
-def get_random_crop(image, seed=None):
-    if seed:
-        np.random.seed(seed)
+def get_random_crop(image, seed):
+    # TODO: fix this
+    rng = np.random.default_rng(seed)
 
     height, width = image.shape[0], image.shape[1]
     aspect_ratio = float(width) / float(height)
@@ -66,6 +47,7 @@ def get_random_crop(image, seed=None):
 
     crop = image[y:y + new_height, x:x + new_width]
     resized_crop = cv2.resize(crop, (width, height))
+
     resized_crop = np.expand_dims(resized_crop, axis=-1)
     return resized_crop
 
@@ -95,14 +77,15 @@ def process_image_sequence(image_files, images_path, image_height, image_width):
     sequence = []
     augmented_sequence = []
     labels = []
+    seed = np.random.randint(0, 1000000)
 
-    for index, filename in enumerate(image_files):
+    for filename in image_files:
         image = get_image(os.path.join(images_path, filename), image_height, image_width)
         label = 1 if "sleep" in filename else 0
         sequence.append(image)
         labels.append(label)
 
-        augmented_image = get_random_crop(image, seed=index)
+        augmented_image = random_transform(image, seed=seed)
         augmented_sequence.append(augmented_image)
 
     return sequence, augmented_sequence, labels[-1]
@@ -110,6 +93,7 @@ def process_image_sequence(image_files, images_path, image_height, image_width):
 
 def process_data(input_path):
     X, y = [], []
+    X_aug, y_aug = [], []
 
     # Get the list of image files
     image_files = sorted((file for file in os.listdir(input_path) if file.endswith(".jpg")),
@@ -135,14 +119,20 @@ def process_data(input_path):
             sequence, augmented_sequence, label = future.result()
             X.append(sequence)
             y.append(label)
-            X.append(augmented_sequence)
-            y.append(label)
+            X_aug.append(augmented_sequence)
+            y_aug.append(label)
             progress_bar.update(1)
 
         progress_bar.close()
 
     X = np.array(X) / 255.0
     y = np.array(y)
+    X_aug = np.array(X_aug) / 255.0
+    y_aug = np.array(y_aug)
+
+    X = np.concatenate((X, X_aug))
+    y = np.concatenate((y, y_aug))
+
     return X, y
 
 
@@ -160,4 +150,5 @@ def save_data(input_dir, output_dir):
     np.save(os.path.join(output_dir, input_dir.split("/")[-1] + "_labels.npy"), labels)
 
 
-save_data("./data/raw", "./prep")
+if __name__ == "__main__":
+    save_data("./data/raw", "./prep")
