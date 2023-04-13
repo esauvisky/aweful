@@ -5,12 +5,31 @@
     "version": "0.2.0",
     "configurations": [
 
+
         {
             "name": "train",
             "type": "python",
             "request": "launch",
             "program": "main.py",
             "args": ["train"],
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "train2",
+            "type": "python",
+            "request": "launch",
+            "program": "main_new.py",
+            "args": ["train"],
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "preprocess",
+            "type": "python",
+            "request": "launch",
+            "program": "preprocess_data.py",
+            "args": [""],
             "console": "integratedTerminal",
             "justMyCode": true
         },

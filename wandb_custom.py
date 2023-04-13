@@ -1,3 +1,31 @@
+import datetime
+import os
+from sklearn.metrics import classification_report, confusion_matrix
+
+from sklearn.model_selection import train_test_split
+
+
+SEQUENCE_LENGTH = 16
+BATCH_SIZE = 4
+
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+import os
+import random
+import sys
+
+import cv2
+import numpy as np
+import tensorflow as tf
+from keras.callbacks import Callback, EarlyStopping, ModelCheckpoint
+from keras.layers import ConvLSTM2D, Dense, Flatten, Input, MaxPooling3D
+from keras.models import Model
+from keras.optimizers import Adam
+from loguru import logger
+from wandb.keras import WandbCallback
+
+import wandb
+from load_data_old import load_data
+
 def create_wandb_images_table():
     columns = ['Index', 'Date', 'Prediction']
     for s in range(SEQUENCE_LENGTH):

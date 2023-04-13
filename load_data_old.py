@@ -6,20 +6,12 @@ import numpy as np
 
 from tqdm import tqdm
 
-
 def get_image(image_path, image_height, image_width):
-    image = image_utils.load_img(
-        image_path,
-        color_mode="grayscale",
-    )
-    image = image[0:image.shape[0], 0:image.shape[1] - 21]
-    image_utils.smart_resize(image, (image_height, image_width))
-    image = image_utils.img_to_array(image) / 255.0
     image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    image = image[0:image.shape[0], 0:image.shape[1] - 21]
     image = cv2.resize(image, (image_width, image_height))
     image = np.expand_dims(image, axis=-1) # Add an extra channel dimension
     return image
-
 
 def process_image_sequence(image_files, images_path, image_height, image_width):
     images = []
@@ -42,7 +34,7 @@ def load_data(images_path, seq_length, image_height, image_width):
                          key=lambda x: int(x.split(".")[0].split("-")[0]))
 
     # Use a ThreadPoolExecutor to process image sequences in parallel
-    with ThreadPoolExecutor(max_workers=16) as executor:
+    with ThreadPoolExecutor(max_workers=24) as executor:
         # Create the tqdm progress bar
         progress_bar = tqdm(
             total=len(image_files) - seq_length,

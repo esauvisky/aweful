@@ -2,7 +2,9 @@
 
 import datetime
 import os
-
+from re import L
+from sklearn.metrics import classification_report, confusion_matrix
+from wandb_custom import CustomBatchEndCallback
 from sklearn.model_selection import train_test_split
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -21,14 +23,14 @@ from loguru import logger
 from wandb.keras import WandbCallback
 
 import wandb
-from load_data_old import load_data
+from preprocess_data import load_data
 
 # Define default hyperparameters
 SEQUENCE_LENGTH = 16
+BATCH_SIZE = 4
 IMAGE_HEIGHT = 480 // 10
 IMAGE_WIDTH = 640 // 10
-BATCH_SIZE = 2
-EPOCHS = 2
+EPOCHS = 20
 LEARNING_RATE = 1e-4
 PATIENCE = 5
 DEBUG = False
@@ -60,59 +62,23 @@ def create_model(input_shape):
     return out_model
 
 
-def process_image_sequence(images):
-    def process_image_file(image):
-        # Load the image
-        image = cv2.imread(image, cv2.IMREAD_GRAYSCALE)
-
-        # Crop the bottom 21 pixels
-        cropped_image = image[:-21, :]
-
-        # Resize the image to the target dimensions
-        resized_image = cv2.resize(cropped_image, (IMAGE_WIDTH, IMAGE_HEIGHT), interpolation=cv2.INTER_LINEAR)
-
-        # Normalize the image
-        normalized_image = resized_image / 255.0
-
-        # Add a new dimension for the single channel
-        normalized_image = normalized_image[..., np.newaxis]
-
-        return normalized_image
-
-    return [process_image_file(file) for file in images]
-
-
-def get_generator(images_path, split_type):
-    image_files = [f for f in os.listdir(images_path)]
-    image_files = sorted(image_files, key=lambda x: int(x.split(".")[0].split("-")[0]))
-    if split_type == "train":
-        image_files = image_files[:int(len(image_files) * 0.8)]
-    elif split_type == "val":
-        image_files = image_files[int(len(image_files) * 0.8):]
-
+def get_generator(inputs):
     def generator():
-        while True:
-            batch_images = []
-            batch_labels = []
-            for i in range(len(image_files) - SEQUENCE_LENGTH):
-                label = tf.constant(1, dtype=tf.int8) if "sleep" in image_files[-1] else tf.constant(0, dtype=tf.int8)
-                batch_images.append(
-                    process_image_sequence([os.path.join(images_path, f) for f in image_files[i:i + SEQUENCE_LENGTH]]))
-                batch_labels.append(label)
-
-                if len(batch_images) == BATCH_SIZE:
-                    yield batch_images, batch_labels
-                    batch_images = []
-                    batch_labels = []
+        for i in range(0, len(sequences), BATCH_SIZE):
+            if not i + BATCH_SIZE < len(sequences):
+                continue
+            batch_images = sequences[i:i + BATCH_SIZE]
+            batch_labels = labels[i:i + BATCH_SIZE]
+            yield batch_images, batch_labels
 
     generator = tf.data.Dataset.from_generator(generator=generator,
-                                               output_types=(tf.float16, tf.int8),
+                                               output_types=(tf.float32, tf.int32),
                                                output_shapes=(
                                                    (BATCH_SIZE, SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1),
                                                    (BATCH_SIZE,),
                                                )).prefetch(tf.data.experimental.AUTOTUNE)
 
-    step_count = len(image_files) // BATCH_SIZE
+    step_count = len(sequences) // BATCH_SIZE
 
     return generator, step_count
 
@@ -145,53 +111,88 @@ def main():
                    "batch_size": BATCH_SIZE,})
 
     if routine == "train":
-        train_dataset, steps_per_epoch = get_generator("./data/0/", "train")
-        val_dataset, validation_steps = get_generator("./data/0/", "val")
+        with tf.device("GPU"):
+            X, y = load_data("./preprocessed_data/")
+            X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42, shuffle=True)
 
-        callbacks = [
-            WandbCallback(log_weights=True,
-                          log_evaluation=True,
-                          log_batch_frequency=10,
-                          log_evaluation_frequency=10,
-                          log_weights_frequency=10,
-                          save_model=False),
-            EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True),
-            ModelCheckpoint(FILENAME, monitor="val_loss", save_best_only=True, verbose=1)]
+            callbacks = [
+                CustomBatchEndCallback(X, y),
+                WandbCallback(
+                    log_weights=True,
+                    log_evaluation=True,
+                                                                                          #   log_gradients=True,
+                                                                                          #   training_data=(X_train, y_train),
+                                                                                          #   validation_data=(X_val, y_val),
+                    log_batch_frequency=10,
+                    log_evaluation_frequency=10,
+                    log_weights_frequency=10,
+                    save_model=False),
+                EarlyStopping(monitor="val_accuracy", patience=5, restore_best_weights=True),
+                ModelCheckpoint(FILENAME, monitor="val_accuracy", save_best_only=True, verbose=1)]
 
-        model.fit(train_dataset,
-                  epochs=EPOCHS,
-                  callbacks=callbacks,
-                  steps_per_epoch=steps_per_epoch,
-                  validation_data=val_dataset,
-                  validation_steps=validation_steps)
+            logger.info("Training model...")
+            model.fit(X_train,
+                      y_train,
+                      batch_size=BATCH_SIZE,
+                      epochs=EPOCHS,
+                      callbacks=callbacks,
+                      validation_data=(X_val, y_val),
+                      verbose=2,
+                      use_multiprocessing=True,
+                      workers=32)
+
+        # # train_dataset, steps_per_epoch = get_generator("./data/0/", "train")
+        # # val_dataset, validation_steps = get_generator("./data/0/", "val")
+        # train_dataset, steps_per_epoch = get_generator("./preprocessed_data/", "train")
+        # val_dataset, validation_steps = get_generator("./preprocessed_data/", "val")
+
+        # callbacks = [
+        #     WandbCallback(log_weights=True,
+        #                   log_evaluation=True,
+        #                   log_batch_frequency=10,
+        #                   log_evaluation_frequency=10,
+        #                   log_weights_frequency=10,
+        #                   save_model=False),
+        #     EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True),
+        #     ModelCheckpoint(FILENAME, monitor="val_loss", save_best_only=True, verbose=1)]
+
+        # model.fit(train_dataset,
+        #           epochs=EPOCHS,
+        #           callbacks=callbacks,
+        #           validation_data=val_dataset)
+
+        # Make predictions on the test set
+        y_pred = model.predict(X_val)
+        y_pred_classes = np.round(y_pred)
+
+        # Evaluate the model performance
+        logger.info("\nConfusion matrix:\n" + str(confusion_matrix(y_val, y_pred_classes)))
+        logger.info("\nClassification report:\n" + str(classification_report(y_val, y_pred_classes)))
 
         # Save the model weights
         model.save_weights(FILENAME)
         logger.info("Saved model weights")
 
-    elif os.path.exists(FILENAME):
+    if os.path.exists(FILENAME):
         model.load_weights(FILENAME)
         logger.success(f"Loaded model weights from {FILENAME}")
-
     else:
         logger.error(f"Could not find file '{FILENAME}'")
         if routine != "train": return
         return
 
-    with tf.device("GPU"):
-        X, y = load_data("./test/", SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH)
-        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42, shuffle=True)
-
-        for i in range(0, len(X), BATCH_SIZE):
-            X_predict = X[i:i + BATCH_SIZE]
-            y_predict = y[i:i + BATCH_SIZE]
-            y_out = model.predict(X_predict, verbose=0)
-            y_out = np.round(y_out).flatten().astype(int)
-            for n, cat in enumerate(y_out):
-                prediction = "🆙" if cat == 0 else "💤"
-                if y_predict[n] != cat: color = "\033[91m"
-                else: color = "\033[92m" if cat == 0 else "\033[93m"
-                print(color + f"{i:05d}:" + str(prediction) + "\033[0m", end=" | ")
+    for index in range(0, 1000):
+        # picks a random X value
+        # index = random.randint(0, len(X) - 1)
+        X_predict = X[index:index + 1]
+        y_predict = y[index:index + 1]
+        y_out = model.predict(X_predict, verbose=0)
+        y_out = np.round(y_out).flatten().astype(int)
+        for n, cat in enumerate(y_out):
+            prediction = "🆙" if cat == 0 else "💤"
+            if y_predict[n] != cat: color = "\033[91m"
+            else: color = "\033[92m" if cat == 0 else "\033[93m"
+            print(color + f"{index:05d}:" + str(prediction) + "\033[0m", end="\t ")
 
     # if routine == "clock":
     #     index = 0
