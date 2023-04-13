@@ -21,7 +21,6 @@ from wandb_custom import CustomBatchEndCallback
 
 from hyperparameters import SEQUENCE_LENGTH, BATCH_SIZE, IMAGE_HEIGHT, IMAGE_WIDTH, EPOCHS, LEARNING_RATE, PATIENCE, DEBUG, FILENAME
 
-
 def setup_logging(level="DEBUG", show_module=False):
     """
     Setups better log format for loguru
@@ -49,7 +48,9 @@ def create_model(input_shape):
 
 if __name__ == "__main__":
     setup_logging("DEBUG" if DEBUG else "INFO")
-    logger.info(f"Num GPUs Available: {len(tf.config.list_physical_devices('GPU'))}")
+    gpus = tf.config.list_physical_devices('GPU')
+    logger.info(f"Num GPUs Available: {len(gpus)}")
+    tf.config.experimental.set_memory_growth(gpus[0], True)
 
     # Create the model
     input_shape = (SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1)
@@ -69,27 +70,27 @@ if __name__ == "__main__":
     )
 
     with tf.device("GPU"):
-        X, y = load_data("./prep/")
+        X, y = load_data("raw")
         X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, shuffle=True)
+
+        train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train))
+        train_dataset = train_dataset.shuffle(buffer_size=len(X_train)).batch(BATCH_SIZE)
 
         callbacks = [
             CustomBatchEndCallback(X, y),
             WandbCallback(log_weights=True,
                           log_evaluation=True,
-                          log_gradients=True,
                           training_data=(X_train, y_train),
                           validation_data=(X_val, y_val),
-                          log_batch_frequency=10,
-                          log_evaluation_frequency=10,
-                          log_weights_frequency=10,
+                          log_batch_frequency=len(X_train) / BATCH_SIZE / 10,
+                          log_evaluation_frequency=len(X_train) / BATCH_SIZE / 10,
+                          log_weights_frequency=len(X_train) / BATCH_SIZE / 10,
                           save_model=False),
-            EarlyStopping(monitor="val_accuracy", patience=5, restore_best_weights=True),
+            EarlyStopping(monitor="val_accuracy", patience=5, restore_best_weights=False),
             ModelCheckpoint(FILENAME, monitor="val_accuracy", save_best_only=True, verbose=1)]
 
         logger.info("Training model...")
-        model.fit(X_train,
-                  y_train,
-                  batch_size=BATCH_SIZE,
+        model.fit(train_dataset,
                   epochs=EPOCHS,
                   callbacks=callbacks,
                   validation_data=(X_val, y_val),
@@ -108,13 +109,6 @@ if __name__ == "__main__":
     # Save the model weights
     model.save_weights(FILENAME)
     logger.info("Saved model weights")
-
-    if os.path.exists(FILENAME):
-        model.load_weights(FILENAME)
-        logger.success(f"Loaded model weights from {FILENAME}")
-    else:
-        logger.error(f"Could not find file '{FILENAME}'")
-        sys.exit(1)
 
     for index in range(0, 1000):
         # picks a random X value

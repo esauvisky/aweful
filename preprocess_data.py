@@ -3,12 +3,14 @@
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import zip_longest
+from loguru import logger
 
 import cv2
 import numpy as np
 from tqdm.auto import tqdm
 
 from hyperparameters import SEQUENCE_LENGTH, BATCH_SIZE, IMAGE_HEIGHT, IMAGE_WIDTH, EPOCHS, LEARNING_RATE, PATIENCE, DEBUG, FILENAME
+
 
 def random_transform(image, seed):
     rng = np.random.default_rng(seed)
@@ -27,6 +29,7 @@ def random_transform(image, seed):
 
     image = np.expand_dims(image, axis=-1)
     return image
+
 
 def get_random_crop(image, seed):
     # TODO: fix this
@@ -100,7 +103,7 @@ def process_data(input_path):
                          key=lambda x: int(x.split(".")[0].split("-")[0]))
 
     # Use a ThreadPoolExecutor to process image sequences in parallel
-    with ThreadPoolExecutor(max_workers=24) as executor:
+    with ThreadPoolExecutor(max_workers=32) as executor:
         # Create the tqdm progress bar
         progress_bar = tqdm(
             total=len(image_files) - SEQUENCE_LENGTH,
@@ -133,22 +136,25 @@ def process_data(input_path):
     X = np.concatenate((X, X_aug))
     y = np.concatenate((y, y_aug))
 
+    logger.info(f"X shape: {X.shape}")
+    logger.info(f"y shape: {y.shape}")
     return X, y
 
 
-def load_data(input_dir):
-    sequences = np.load(os.path.join(input_dir, "sequences.npy"))
-    labels = np.load(os.path.join(input_dir, "labels.npy"))
+def load_data(key):
+    loaded = np.load(os.path.join("./prep/", f"{key}.npz"))
+    sequences = loaded["sequences"]
+    labels = loaded["labels"]
     return sequences, labels
 
 
-def save_data(input_dir, output_dir):
-    sequences, labels = process_data(input_dir)
+def save_data(key):
+    sequences, labels = process_data(f"./data/{key}")
 
     # Save the data to disk
-    np.save(os.path.join(output_dir, input_dir.split("/")[-1] + "_sequences.npy"), sequences)
-    np.save(os.path.join(output_dir, input_dir.split("/")[-1] + "_labels.npy"), labels)
+    logger.info(f"Saving {key} data to disk...")
+    np.savez_compressed(os.path.join("./prep/", key), sequences=sequences, labels=labels)
 
 
 if __name__ == "__main__":
-    save_data("./data/raw", "./prep")
+    save_data("raw")
