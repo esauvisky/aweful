@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 
 import os
+
+from tqdm.auto import tqdm
+
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import sys
 
 import numpy as np
 import tensorflow as tf
-import wandb
+from keras import mixed_precision
 from keras.callbacks import EarlyStopping, ModelCheckpoint
 from keras.layers import ConvLSTM2D, Dense, Flatten, Input, MaxPooling3D
 from keras.models import Model
