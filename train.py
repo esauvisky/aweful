@@ -64,45 +64,45 @@ def main(use_wandb):
     optimizer = Adam(learning_rate=LEARNING_RATE)
     model.compile(loss="binary_crossentropy", optimizer=optimizer, metrics=["accuracy"])
 
-    # Start wandb
-    wandb.init(
-        project="aweful-train",
-        config={
-            "optimizer": "adam",
-            "loss": "binary_crossentropy",
-            "metric": "accuracy",
-            "epoch": EPOCHS,
-            "batch_size": BATCH_SIZE,},
-    )
+    if use_wandb:
+        wandb.init(
+            project="aweful-train",
+            config={
+                "optimizer": "adam",
+                "loss": "binary_crossentropy",
+                "metric": "accuracy",
+                "epoch": EPOCHS,
+                "batch_size": BATCH_SIZE,},
+        )
+
+    # with tf.device("CPU"):
+    # Call the new function with the appropriate key
+    X, y = load_individual_data("raw")
+    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, shuffle=True)
+
+    train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train))
+    train_dataset = train_dataset.shuffle(buffer_size=len(X_train)).batch(BATCH_SIZE)
+    train_dataset = train_dataset.prefetch(tf.data.experimental.AUTOTUNE)
+    val_dataset = tf.data.Dataset.from_tensor_slices((X_val, y_val))
+    val_dataset = val_dataset.shuffle(buffer_size=len(X_val)).batch(BATCH_SIZE)
+    val_dataset = val_dataset.prefetch(tf.data.experimental.AUTOTUNE)
+
+    callbacks = [
+        EarlyStopping(monitor="val_accuracy", patience=5, restore_best_weights=False),
+        ModelCheckpoint(FILENAME, monitor="val_accuracy", save_best_only=True, verbose=1)]
+
+    if use_wandb:
+        callbacks.insert(0, CustomBatchEndCallback(X, y))
+        callbacks.insert(0, WandbCallback(log_weights=True,
+                                          log_evaluation=True,
+                                          log_batch_frequency=len(X_train) / BATCH_SIZE / 10,
+                                          log_evaluation_frequency=len(X_train) / BATCH_SIZE / 10,
+                                          log_weights_frequency=len(X_train) / BATCH_SIZE / 10,
+                                          save_model=False)) # yapf: disable
 
     with tf.device("GPU"):
-        X, y = load_data("raw")
-        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, shuffle=True)
-
-        train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train))
-        train_dataset = train_dataset.shuffle(buffer_size=len(X_train)).batch(BATCH_SIZE)
-
-        callbacks = [
-            CustomBatchEndCallback(X, y),
-            WandbCallback(log_weights=True,
-                          log_evaluation=True,
-                          training_data=(X_train, y_train),
-                          validation_data=(X_val, y_val),
-                          log_batch_frequency=len(X_train) / BATCH_SIZE / 10,
-                          log_evaluation_frequency=len(X_train) / BATCH_SIZE / 10,
-                          log_weights_frequency=len(X_train) / BATCH_SIZE / 10,
-                          save_model=False),
-            EarlyStopping(monitor="val_accuracy", patience=5, restore_best_weights=False),
-            ModelCheckpoint(FILENAME, monitor="val_accuracy", save_best_only=True, verbose=1)]
-
         logger.info("Training model...")
-        model.fit(train_dataset,
-                  epochs=EPOCHS,
-                  callbacks=callbacks,
-                  validation_data=(X_val, y_val),
-                  verbose=1,
-                  use_multiprocessing=True,
-                  workers=32)
+        model.fit(train_dataset, epochs=EPOCHS, callbacks=callbacks, validation_data=val_dataset, verbose=1)
 
     # Make predictions on the test set
     y_pred = model.predict(X_val)
