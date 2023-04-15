@@ -81,30 +81,6 @@ def random_transform(image, seed):
     return image
 
 
-def get_random_crop(image, seed):
-    # TODO: fix this
-    rng = np.random.default_rng(seed)
-
-    height, width = image.shape[0], image.shape[1]
-    aspect_ratio = float(width) / float(height)
-
-    if width > height:
-        new_width = np.random.randint(int(width * 0.7), width)
-        new_height = int(new_width / aspect_ratio)
-    else:
-        new_height = np.random.randint(int(height * 0.7), height)
-        new_width = int(new_height * aspect_ratio)
-
-    x = np.random.randint(0, width - new_width)
-    y = np.random.randint(0, height - new_height)
-
-    crop = image[y:y + new_height, x:x + new_width]
-    resized_crop = cv2.resize(crop, (width, height))
-
-    resized_crop = np.expand_dims(resized_crop, axis=-1)
-    return resized_crop
-
-
 def get_sequence(images_path):
     sequence = []
     augmented_sequence = []
@@ -127,10 +103,10 @@ def get_image(image_path, image_height, image_width):
 
 
 def process_image_sequence(image_files, images_path, image_height, image_width):
+    global SEED
     sequence = []
     augmented_sequence = []
     labels = []
-    seed = np.random.randint(0, 1000000)
 
     for filename in image_files:
         image = get_image(os.path.join(images_path, filename), image_height, image_width)
