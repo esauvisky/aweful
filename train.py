@@ -16,10 +16,11 @@ from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.model_selection import train_test_split
 from wandb.keras import WandbCallback
 
-from preprocess_data import load_data
+import wandb
+from hyperparameters import (BATCH_SIZE, DEBUG, EPOCHS, FILENAME, IMAGE_HEIGHT, IMAGE_WIDTH, LEARNING_RATE, PATIENCE, SEQUENCE_LENGTH)
+from preprocess_data import load_individual_data
 from wandb_custom import CustomBatchEndCallback
 
-from hyperparameters import SEQUENCE_LENGTH, BATCH_SIZE, IMAGE_HEIGHT, IMAGE_WIDTH, EPOCHS, LEARNING_RATE, PATIENCE, DEBUG, FILENAME
 
 def setup_logging(level="DEBUG", show_module=False):
     """
