@@ -50,11 +50,13 @@ def create_model(input_shape):
     return out_model
 
 
-if __name__ == "__main__":
+def main(use_wandb):
     setup_logging("DEBUG" if DEBUG else "INFO")
     gpus = tf.config.list_physical_devices('GPU')
     logger.info(f"Num GPUs Available: {len(gpus)}")
     tf.config.experimental.set_memory_growth(gpus[0], True)
+    policy = mixed_precision.Policy('mixed_float16')
+    mixed_precision.set_global_policy(policy)
 
     # Create the model
     input_shape = (SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1)
@@ -127,4 +129,9 @@ if __name__ == "__main__":
             else: color = "\033[92m" if cat == 0 else "\033[93m"
             print(color + f"{index:05d}:" + str(prediction) + "\033[0m", end="\t ")
 
-    wandb.finish()
+    if use_wandb:
+        wandb.finish()
+
+
+if __name__ == "__main__":
+    main(use_wandb=False)
