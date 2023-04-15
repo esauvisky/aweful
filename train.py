@@ -75,17 +75,17 @@ def main(use_wandb):
                 "batch_size": BATCH_SIZE,},
         )
 
-    # with tf.device("CPU"):
-    # Call the new function with the appropriate key
-    X, y = load_individual_data("raw")
-    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, shuffle=True)
+    with tf.device("CPU"):
+        # Call the new function with the appropriate key
+        X, y = load_individual_data("raw")
+        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, shuffle=True)
 
-    train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train))
-    train_dataset = train_dataset.shuffle(buffer_size=len(X_train)).batch(BATCH_SIZE)
-    train_dataset = train_dataset.prefetch(tf.data.experimental.AUTOTUNE)
-    val_dataset = tf.data.Dataset.from_tensor_slices((X_val, y_val))
-    val_dataset = val_dataset.shuffle(buffer_size=len(X_val)).batch(BATCH_SIZE)
-    val_dataset = val_dataset.prefetch(tf.data.experimental.AUTOTUNE)
+        train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train))
+        train_dataset = train_dataset.shuffle(buffer_size=len(X_train)).batch(BATCH_SIZE)
+        train_dataset = train_dataset.prefetch(tf.data.experimental.AUTOTUNE)
+        val_dataset = tf.data.Dataset.from_tensor_slices((X_val, y_val))
+        val_dataset = val_dataset.shuffle(buffer_size=len(X_val)).batch(BATCH_SIZE)
+        val_dataset = val_dataset.prefetch(tf.data.experimental.AUTOTUNE)
 
     callbacks = [
         EarlyStopping(monitor="val_accuracy", patience=5, restore_best_weights=False),
