@@ -14,8 +14,9 @@ import tensorflow as tf
 from tqdm.auto import tqdm
 from keras.preprocessing.image import ImageDataGenerator, image_utils
 
-from hyperparameters import SEQUENCE_LENGTH, BATCH_SIZE, IMAGE_HEIGHT, IMAGE_WIDTH, EPOCHS, LEARNING_RATE, PATIENCE, DEBUG, FILENAME
+from hyperparameters import SEQUENCE_LENGTH, BATCH_SIZE, IMAGE_HEIGHT, IMAGE_WIDTH, THREADS, EPOCHS, LEARNING_RATE, PATIENCE, DEBUG, FILENAME
 
+from skimage import exposure
 SEED = np.random.randint(0, 1000000)
 
 
@@ -30,7 +31,15 @@ def set_seed(seed=0):
     os.environ['PYTHONHASHSEED'] = str(seed)
 
 
-def simulate_panning(images, seed):
+def standardize_inplace(image):
+    mean = np.mean(image)
+    std = np.std(image)
+    image -= mean
+    image /= std
+    return image
+
+
+def simulate_panning(images):
     global SEED
     datagen = ImageDataGenerator(height_shift_range=(-0.18, 0.10),
                                  width_shift_range=0.1,
@@ -45,29 +54,29 @@ def simulate_panning(images, seed):
     augmented_images = []
     for image in images:
         augmented_image = datagen.apply_transform(image, transformation_matrix)
+        # show_image(augmented_image)
         augmented_images.append(augmented_image.astype(np.int32))
 
-    return np.array(augmented_images)
+    return augmented_images
 
 
-def show_image(image_or_sequence):
-    if len(np.array(image_or_sequence).shape) == 4:
-        for image in image_or_sequence:
-            show_image(image)
-    else:
-        # Read the input image
-        # image = cv2.imread(image_or_sequence, cv2.IMREAD_GRAYSCALE)
+def show_image(image):
+    # Read the input image
+    # image = cv2.imread(image, cv2.IMREAD_GRAYSCALE)
+    if image.dtype != np.uint8:
+        image = (image * 255).astype(np.uint8)
 
-        # Simulate panning
-        panned_image = simulate_panning(image_or_sequence, SEED)
+    # Convert the standardized image to the uint8 format
+    image = ((image - image.min()) / (image.max() - image.min()) * 255).astype(np.uint8)
 
-        # Display the original and panned images
-        cv2.imshow('Original Image', image_or_sequence)
-        cv2.imshow('Panned Image', panned_image)
+    # Remove the extra dimension
+    image = np.squeeze(image, axis=-1)
 
-        # Wait for a key press and close the windows
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
+    # Display the original and panned images
+    cv2.imshow('Original Image', image)
+    # Wait for a key press and close the windows
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
 
 
 def random_transform(image, seed):
@@ -89,24 +98,12 @@ def random_transform(image, seed):
     return image
 
 
-def get_sequence(images_path):
-    sequence = []
-    augmented_sequence = []
-    for image_path in images_path:
-        image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-        image = image[0:image.shape[0], 0:image.shape[1] - 21]
-        image = cv2.resize(image, (IMAGE_WIDTH, IMAGE_HEIGHT))
-        image = np.expand_dims(image, axis=-1)
-        sequence.append(image)
-
-    return sequence, augmented_sequence
-
-
 def get_image(image_path, image_height, image_width):
     image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-    image = image[0:image.shape[0], 0:image.shape[1] - 21]
+    image = image[0:image.shape[0] - 21, 0:image.shape[1]]
     image = cv2.resize(image, (image_width, image_height))
     image = np.expand_dims(image, axis=-1) # Add an extra channel dimension
+
     return image
 
 
@@ -122,7 +119,10 @@ def process_image_sequence(image_files, images_path, image_height, image_width):
         sequence.append(image)
         labels.append(label)
 
-    augmented_sequence = simulate_panning(sequence, SEED)
+    augmented_sequence = simulate_panning(sequence)
+
+    sequence = np.array(sequence).astype(np.float64) / 255.0
+    augmented_sequence = np.array(augmented_sequence).astype(np.float64) / 255.0
 
     return sequence, augmented_sequence, labels[-1]
 
@@ -158,50 +158,65 @@ def process_data(input_path):
     # remove the final sequences until we have a multiple of the batch size
     oversampled_sequences = oversampled_sequences[:len(oversampled_sequences) - (len(oversampled_sequences) % BATCH_SIZE)]
 
+    def image_sequence_generator(image_files, batch_size):
+        num_batches = len(image_files) // batch_size
+        for i in range(num_batches):
+            batch = image_files[i * batch_size:(i+1) * batch_size]
+            yield batch
+
+    image_sequence_batches = image_sequence_generator(oversampled_sequences, BATCH_SIZE)
+
     logger.info(f"Oversampled sequences: {len(oversampled_sequences)}")
     logger.info(f"Minority count: {minority_count}")
     logger.info(f"Majority count: {majority_count}")
 
     # Use a ThreadPoolExecutor to process image sequences in parallel
-    with ThreadPoolExecutor(max_workers=24) as executor:
+    with ThreadPoolExecutor(max_workers=THREADS) as executor:
         # Create the tqdm progress bar
-        progress_bar = tqdm(
-            total=len(oversampled_sequences) - SEQUENCE_LENGTH,
-            smoothing=0.1,
-            desc="Processing images...",
-            position=0,
-        )
+        progress_bar = tqdm(total=len(oversampled_sequences) - SEQUENCE_LENGTH,
+                            smoothing=0.1,
+                            desc="Processing images...",
+                            position=0,
+                            leave=True)
 
-        # Submit the tasks to the executor
         offset = np.random.randint(0, 200)
-        # Submit the tasks to the executor
-        futures = [
-            executor.submit(process_image_sequence, oversampled_sequences[i], input_path, IMAGE_HEIGHT, IMAGE_WIDTH)
-            for i in range(0,
-                           len(oversampled_sequences) - SEQUENCE_LENGTH)]
+        # Process batches of image sequences
+        for batch in image_sequence_batches:
+            # Submit the tasks to the executor
+            futures = [
+                executor.submit(
+                    process_image_sequence,
+                    batch[i],
+                    input_path,
+                    IMAGE_HEIGHT,
+                    IMAGE_WIDTH,
+                ) for i in range(0,
+                                 len(batch) - SEQUENCE_LENGTH)]
 
-        # Use as_completed() to process the results as they become available, and update the progress bar
-        for future in as_completed(futures):
-            sequence, augmented_sequence, label = future.result()
-            X.append(sequence)
-            X_aug.append(augmented_sequence)
-            y.append(label)
+            # Use as_completed() to process the results as they become available, and update the progress bar
+            for future in as_completed(futures):
+                sequence, augmented_sequence, label = future.result()
 
-            if progress_bar.n % (500+offset) == 0:
-                logger.info("Switching seed for augmentation")
-                set_seed(np.random.randint(0, 1000000))
+                X.append(sequence)
+                X_aug.append(augmented_sequence)
+                y.append(label)
 
-            progress_bar.update(1)
+                if progress_bar.n % (500+offset) == 0:
+                    logger.info("Switching seed for augmentation")
+                    set_seed(np.random.randint(0, 1000000))
+
+                progress_bar.update(1)
 
         progress_bar.close()
 
     # logger.info(f"X_aug shape: {X_aug.shape}")
-    logger.info("Concatenating...")
-    X = np.concatenate((X, X_aug))
-    y = np.concatenate((y, y))
+    # logger.info("Concatenating...")
+    # X = np.concatenate((X, X_aug))
+    # y = np.concatenate((y, y))
     logger.info(f"X_aug size: {len(X_aug)} | X Actual: {len(X)} | Overlook sequences: {len(oversampled_sequences) - SEQUENCE_LENGTH}")
     logger.info(f"y size: {len(y)} | Classes: {np.unique(y)} | Counts: {np.bincount(y)}")
-    return X, y
+
+    return X, X_aug, y
 
 
 def load_individual_data(key):
@@ -228,7 +243,7 @@ def load_individual_data(key):
 
 def load_individual_file(input_dir, idx):
     sequence_file = os.path.join(input_dir, f"sequence_{idx}.npz")
-    sequence = np.load(sequence_file)["sequence"] # TODO: check if we need to / 255.0
+    sequence = np.load(sequence_file)["sequence"] # Using standardization in the process_images func already / 255.0
 
     label_file = os.path.join(input_dir, f"label_{idx}.npy")
     label = np.load(label_file)
@@ -275,24 +290,32 @@ def save_single_data(sequence, label, index, key):
 
 
 def save_data(key):
-    sequences, labels = process_data(f"./data/{key}")
+    sequences, augmented_sequences, labels = process_data(f"./data/{key}")
 
     table = wandb.Table(columns=["label", "video"])
-    for i in random.sample(range(len(labels)), 10):
-        video_raw = sequences[i]
-        # Convert the array to the uint8 data type
-        video_uint8 = (video_raw * 255).astype(np.uint8)
-        # Remove the extra dimension (8, 240, 320)
-        video_squeezed = np.squeeze(video_uint8, axis=-1)
-        # Repeat the channel dimension 3 times to simulate an RGB image (8, 3, 240, 320)
-        video_rgb = np.repeat(video_squeezed[:, np.newaxis, :, :], 3, axis=1)
-        video = wandb.Video(video_rgb, fps=4)
-        table.add_data(labels[i], video)
+    for ix in random.sample(range(0, len(sequences)), 10):
+        sequence = sequences[ix]
+        augmented_sequence = augmented_sequences[ix]
+
+        def get_video(seq):
+            # Convert the array to the uint8 data type
+            video_uint8 = (seq * 255).astype(np.uint8)
+            # Remove the extra dimension (8, 240, 320)
+            video_squeezed = np.squeeze(video_uint8, axis=-1)
+            # Repeat the channel dimension 3 times to simulate an RGB image (8, 3, 240, 320)
+            video_rgb = np.repeat(video_squeezed[:, np.newaxis, :, :], 3, axis=1)
+            return wandb.Video(video_rgb, fps=4)
+
+        table.add_data(labels[ix], get_video(sequence))
+        table.add_data(labels[ix], get_video(augmented_sequence))
+
     wandb.log({key: table})
 
-    with ThreadPoolExecutor(max_workers=24) as executor:
+    with ThreadPoolExecutor(max_workers=THREADS) as executor:
         save_futures = [
             executor.submit(save_single_data, sequences[i], labels[i], i, key) for i in range(len(sequences))]
+        save_futures += [
+            executor.submit(save_single_data, augmented_sequences[i], labels[i]) for i in range(len(augmented_sequences))]
 
         # Show progress using tqdm
         progress_bar = tqdm(
