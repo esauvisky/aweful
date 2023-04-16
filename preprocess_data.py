@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 import os
+
+import wandb
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import random
@@ -261,6 +263,19 @@ def save_single_data(sequence, label, index, key):
 def save_data(key):
     sequences, labels = process_data(f"./data/{key}")
 
+    table = wandb.Table(columns=["label", "video"])
+    for i in random.sample(range(len(labels)), 10):
+        video_raw = sequences[i]
+        # Convert the array to the uint8 data type
+        video_uint8 = (video_raw * 255).astype(np.uint8)
+        # Remove the extra dimension (8, 240, 320)
+        video_squeezed = np.squeeze(video_uint8, axis=-1)
+        # Repeat the channel dimension 3 times to simulate an RGB image (8, 3, 240, 320)
+        video_rgb = np.repeat(video_squeezed[:, np.newaxis, :, :], 3, axis=1)
+        video = wandb.Video(video_rgb, fps=4)
+        table.add_data(labels[i], video)
+    wandb.log({key: table})
+
     with ThreadPoolExecutor(max_workers=24) as executor:
         save_futures = [
             executor.submit(save_single_data, sequences[i], labels[i], i, key) for i in range(len(sequences))]
@@ -279,7 +294,9 @@ def save_data(key):
 
 
 if __name__ == "__main__":
+    wandb.init(project="aweful-preprocess")
     gpus = tf.config.list_physical_devices('GPU')
     logger.info(f"Num GPUs Available: {len(gpus)}")
     tf.config.experimental.set_memory_growth(gpus[0], True)
     save_data("raw")
+    wandb.finish()
