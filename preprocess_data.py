@@ -155,7 +155,7 @@ def process_data(input_path):
     minority_class_count = len(minority_image_files)
     oversampling_factor = majority_class_count // minority_class_count
 
-    oversampled_sequences = []
+    sequences_filenames = []
     minority_count = 0
     majority_count = 0
     for i in range(len(image_files) - SEQUENCE_LENGTH):
@@ -163,30 +163,22 @@ def process_data(input_path):
         if "sleep" in sequence[-1]:
             for _ in range(oversampling_factor // 3):
                 minority_count += 1
-                oversampled_sequences.append(sequence)
+                sequences_filenames.append(sequence)
         elif random.random() < 0.5:
             majority_count += 1
-            oversampled_sequences.append(sequence)
+            sequences_filenames.append(sequence)
 
     # remove the final sequences until we have a multiple of the batch size
-    oversampled_sequences = oversampled_sequences[:len(oversampled_sequences) - (len(oversampled_sequences) % BATCH_SIZE)]
+    sequences_filenames = sequences_filenames[:len(sequences_filenames) - (len(sequences_filenames) % BATCH_SIZE)]
 
-    def image_sequence_generator(image_files, batch_size):
-        num_batches = len(image_files) // batch_size
-        for i in range(num_batches):
-            batch = image_files[i * batch_size:(i+1) * batch_size]
-            yield batch
-
-    image_sequence_batches = image_sequence_generator(oversampled_sequences, BATCH_SIZE)
-
-    logger.info(f"Oversampled sequences: {len(oversampled_sequences)}")
+    logger.info(f"Oversampled sequences: {len(sequences_filenames)}")
     logger.info(f"Minority count: {minority_count}")
     logger.info(f"Majority count: {majority_count}")
 
     # Use a ThreadPoolExecutor to process image sequences in parallel
     with ThreadPoolExecutor(max_workers=THREADS) as executor:
         # Create the tqdm progress bar
-        progress_bar = tqdm(total=len(oversampled_sequences) - SEQUENCE_LENGTH,
+        progress_bar = tqdm(total=len(sequences_filenames) - SEQUENCE_LENGTH,
                             smoothing=0.1,
                             desc="Processing images...",
                             position=0,
@@ -194,9 +186,9 @@ def process_data(input_path):
 
         offset = np.random.randint(0, 200)
         futures = [
-            executor.submit(process_image_sequence, oversampled_sequences[i], input_path, IMAGE_HEIGHT, IMAGE_WIDTH)
+            executor.submit(process_image_sequence, sequences_filenames[i], input_dir, IMAGE_HEIGHT, IMAGE_WIDTH)
             for i in range(0,
-                           len(oversampled_sequences) - SEQUENCE_LENGTH)]
+                           len(sequences_filenames) - SEQUENCE_LENGTH)]
 
         # Use as_completed() to process the results as they become available, and update the progress bar
         for future in as_completed(futures):
@@ -217,7 +209,7 @@ def process_data(input_path):
     # logger.info("Concatenating...")
     # X = np.concatenate((X, X_aug))
     # y = np.concatenate((y, y))
-    logger.info(f"X_aug size: {len(X_aug)} | X Actual: {len(X)} | Overlook sequences: {len(oversampled_sequences) - SEQUENCE_LENGTH}")
+    logger.info(f"X_aug size: {len(X_aug)} | X Actual: {len(X)} | Overlook sequences: {len(sequences_filenames) - SEQUENCE_LENGTH}")
     logger.info(f"y size: {len(y)} | Classes: {np.unique(y)} | Counts: {np.bincount(y)}")
 
     return X, X_aug, y
