@@ -20,10 +20,6 @@ datagen = ImageDataGenerator(height_shift_range=(-0.18, 0.10),
                              zoom_range=0.05,
                              fill_mode='reflect')
 
-gpus = tf.config.list_physical_devices('GPU')
-logger.info(f"Num GPUs Available: {len(gpus)}")
-tf.config.experimental.set_memory_growth(gpus[0], True)
-
 
 def simulate_panning(images, seed):
     # rotation_range=4,
@@ -270,4 +266,7 @@ def save_data(key):
 
 
 if __name__ == "__main__":
+    gpus = tf.config.list_physical_devices('GPU')
+    logger.info(f"Num GPUs Available: {len(gpus)}")
+    tf.config.experimental.set_memory_growth(gpus[0], True)
     save_data("raw")
