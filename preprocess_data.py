@@ -222,26 +222,27 @@ def load_individual_file(input_dir, idx):
     return sequence, label
 
 
-def load_sequences(key, validation=False):
+def load_sequences(key, datatype):
     input_dir = os.path.join("./prep/", key)
-    start_idx, end_idx = get_generator_sizes(key, validation)
+    idxs = get_generator_idxs(key, datatype)
 
-    for idx in range(start_idx, end_idx):
+    for idx in idxs:
         yield load_individual_file(input_dir, idx)
 
 
-def get_generator_sizes(key, validation):
+# Returns a list of sequence indices
+def get_generator_idxs(key, datatype):
     input_dir = os.path.join("./prep/", key)
     num_files = len(os.listdir(input_dir)) // 2
 
-    if validation:
-        start_idx = 0
-        end_idx = int(num_files * 0.25)
+    if datatype == "val":
+        return range(0, int(num_files * 0.25))
+    elif datatype == "wandb":
+        return np.random.permutation(range(0, num_files))[:10]
+    elif datatype == "train":
+        return range(int(num_files * 0.25), num_files)
     else:
-        start_idx = int(num_files * 0.25)
-        end_idx = num_files
-
-    return start_idx, end_idx
+        raise ValueError("Incorrect datatype for generator: {}".format(datatype))
 
 
 def save_single_data(sequence, label, index, key):
