@@ -190,19 +190,6 @@ def process_data(input_path):
     return X, y
 
 
-def save_individual_data(key, sequences, labels):
-    output_dir = os.path.join("./prep/data", key)
-    os.makedirs(output_dir, exist_ok=True)
-
-    for i in tqdm(range(len(sequences)), desc="Saving data..."):
-        sequence = sequences[i]
-        label = labels[i]
-
-        # Save the sequence and label as individual files
-        np.savez_compressed(os.path.join(output_dir, f"sequence_{i}.npz"), sequence=sequence)
-        np.save(os.path.join(output_dir, f"label_{i}.npy"), label)
-
-
 def load_individual_data(key):
     input_dir = os.path.join("./prep/", key)
     num_files = len(os.listdir(input_dir)) // 2
@@ -225,6 +212,38 @@ def load_individual_data(key):
     return sequences, labels
 
 
+def load_individual_file(input_dir, idx):
+    sequence_file = os.path.join(input_dir, f"sequence_{idx}.npz")
+    sequence = np.load(sequence_file)["sequence"]
+
+    label_file = os.path.join(input_dir, f"label_{idx}.npy")
+    label = np.load(label_file)
+
+    return sequence, label
+
+
+def load_sequences(key, validation=False):
+    input_dir = os.path.join("./prep/", key)
+    start_idx, end_idx = get_generator_sizes(key, validation)
+
+    for idx in range(start_idx, end_idx):
+        yield load_individual_file(input_dir, idx)
+
+
+def get_generator_sizes(key, validation):
+    input_dir = os.path.join("./prep/", key)
+    num_files = len(os.listdir(input_dir)) // 2
+
+    if validation:
+        start_idx = 0
+        end_idx = int(num_files * 0.25)
+    else:
+        start_idx = int(num_files * 0.25)
+        end_idx = num_files
+
+    return start_idx, end_idx
+
+
 def save_single_data(sequence, label, index, key):
     output_dir = os.path.join("./prep/", key)
 
@@ -236,13 +255,6 @@ def save_single_data(sequence, label, index, key):
 
     np.savez_compressed(sequence_file, sequence=sequence)
     np.save(label_file, label)
-
-
-def load_data(key):
-    loaded = np.load(os.path.join("./prep/", f"{key}.npz"))
-    sequences = loaded["sequences"]
-    labels = loaded["labels"]
-    return sequences, labels
 
 
 def save_data(key):
