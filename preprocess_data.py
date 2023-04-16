@@ -17,27 +17,37 @@ from keras.preprocessing.image import ImageDataGenerator, image_utils
 from hyperparameters import SEQUENCE_LENGTH, BATCH_SIZE, IMAGE_HEIGHT, IMAGE_WIDTH, EPOCHS, LEARNING_RATE, PATIENCE, DEBUG, FILENAME
 
 SEED = np.random.randint(0, 1000000)
-datagen = ImageDataGenerator(height_shift_range=(-0.18, 0.10),
-                             width_shift_range=0.1,
-                             zoom_range=0.05,
-                             fill_mode='reflect')
+
+
+def set_seed(seed=0):
+    global SEED
+    SEED = seed
+    np.random.seed(seed)
+    tf.random.set_seed(seed)
+    random.seed(seed)
+    os.environ['TF_DETERMINISTIC_OPS'] = "1"
+    os.environ['TF_CUDNN_DETERMINISM'] = "1"
+    os.environ['PYTHONHASHSEED'] = str(seed)
 
 
 def simulate_panning(images, seed):
-    # rotation_range=4,
-    # brightness_range=(0.5, 1),
-    # shear_range=0.05,
+    global SEED
+    datagen = ImageDataGenerator(height_shift_range=(-0.18, 0.10),
+                                 width_shift_range=0.1,
+                                 zoom_range=0.05,
+                                 fill_mode='reflect')
 
     # Add an extra dimension for the batch size
     images = np.array(images)
 
-    # Apply the data augmentation
-    augmented_image_iterator = datagen.flow(images, batch_size=len(images), seed=seed)
+    transformation_matrix = datagen.get_random_transform(images.shape[1:])
 
-    # Get the augmented images from the iterator
-    augmented_images = next(augmented_image_iterator).astype(np.int32)
+    augmented_images = []
+    for image in images:
+        augmented_image = datagen.apply_transform(image, transformation_matrix)
+        augmented_images.append(augmented_image.astype(np.int32))
 
-    return augmented_images
+    return np.array(augmented_images)
 
 
 def show_image(image_or_sequence):
@@ -49,7 +59,7 @@ def show_image(image_or_sequence):
         # image = cv2.imread(image_or_sequence, cv2.IMREAD_GRAYSCALE)
 
         # Simulate panning
-        panned_image = simulate_panning(image_or_sequence)
+        panned_image = simulate_panning(image_or_sequence, SEED)
 
         # Display the original and panned images
         cv2.imshow('Original Image', image_or_sequence)
