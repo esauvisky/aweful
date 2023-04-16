@@ -4,7 +4,7 @@ import os
 
 import wandb
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 import random
 from loguru import logger
 
