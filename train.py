@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 
+import multiprocessing
 import os
-
-from tqdm.auto import tqdm
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import sys
