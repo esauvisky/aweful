@@ -98,10 +98,23 @@ def random_transform(image, seed):
     return image
 
 
+def adjust_gamma(image, gamma=1.0):
+    # build a lookup table mapping the pixel values [0, 255] to
+    # their adjusted gamma values
+    invGamma = 1.0 / gamma
+    table = np.array([((i / 255.0)**invGamma) * 255 for i in np.arange(0, 256)]).astype("uint8")
+    # apply gamma correction using the lookup table
+    return cv2.LUT(image, table)
+
+
 def get_image(image_path, image_height, image_width):
     image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
     image = image[0:image.shape[0] - 21, 0:image.shape[1]]
     image = cv2.resize(image, (image_width, image_height))
+    # kernel1 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    # close = cv2.morphologyEx(image, cv2.MORPH_CLOSE, kernel1)
+    # image = image / close
+    # image = cv2.normalize(image, image, 0, 255, cv2.NORM_MINMAX)
     image = np.expand_dims(image, axis=-1) # Add an extra channel dimension
 
     return image
@@ -121,8 +134,8 @@ def process_image_sequence(image_files, images_path, image_height, image_width):
 
     augmented_sequence = simulate_panning(sequence)
 
-    sequence = np.array(sequence).astype(np.float64) / 255.0
-    augmented_sequence = np.array(augmented_sequence).astype(np.float64) / 255.0
+    # sequence = np.array(sequence).astype(np.float64) / 255.0
+    # augmented_sequence = np.array(augmented_sequence).astype(np.float64) / 255.0
 
     return sequence, augmented_sequence, labels[-1]
 
@@ -180,32 +193,23 @@ def process_data(input_path):
                             leave=True)
 
         offset = np.random.randint(0, 200)
-        # Process batches of image sequences
-        for batch in image_sequence_batches:
-            # Submit the tasks to the executor
-            futures = [
-                executor.submit(
-                    process_image_sequence,
-                    batch[i],
-                    input_path,
-                    IMAGE_HEIGHT,
-                    IMAGE_WIDTH,
-                ) for i in range(0,
-                                 len(batch) - SEQUENCE_LENGTH)]
+        futures = [
+            executor.submit(process_image_sequence, oversampled_sequences[i], input_path, IMAGE_HEIGHT, IMAGE_WIDTH)
+            for i in range(0,
+                           len(oversampled_sequences) - SEQUENCE_LENGTH)]
 
-            # Use as_completed() to process the results as they become available, and update the progress bar
-            for future in as_completed(futures):
-                sequence, augmented_sequence, label = future.result()
+        # Use as_completed() to process the results as they become available, and update the progress bar
+        for future in as_completed(futures):
+            sequence, augmented_sequence, label = future.result()
+            X.append(sequence)
+            X_aug.append(augmented_sequence)
+            y.append(label)
 
-                X.append(sequence)
-                X_aug.append(augmented_sequence)
-                y.append(label)
+            if progress_bar.n % (500+offset) == 0:
+                logger.info("Switching seed for augmentation")
+                set_seed(np.random.randint(0, 1000000))
 
-                if progress_bar.n % (500+offset) == 0:
-                    logger.info("Switching seed for augmentation")
-                    set_seed(np.random.randint(0, 1000000))
-
-                progress_bar.update(1)
+            progress_bar.update(1)
 
         progress_bar.close()
 
@@ -269,7 +273,7 @@ def get_generator_idxs(key, datatype):
     elif datatype == "wandb":
         return np.random.permutation(range(0, num_files))[:BATCH_SIZE * 3]
     elif datatype == "train":
-        return np.random.permutation(range(int(num_files * 0.25), num_files))[:1000]
+        return np.random.permutation(range(int(num_files * 0.25), num_files))
     else:
         raise ValueError("Incorrect datatype for generator: {}".format(datatype))
 
@@ -298,6 +302,7 @@ def save_data(key):
         augmented_sequence = augmented_sequences[ix]
 
         def get_video(seq):
+            seq = np.array(seq)
             # Convert the array to the uint8 data type
             video_uint8 = (seq * 255).astype(np.uint8)
             # Remove the extra dimension (8, 240, 320)
