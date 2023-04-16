@@ -36,7 +36,7 @@ def setup_logging(level="DEBUG", show_module=False):
 def create_model(input_shape):
     """Create a ConvLSTM model."""
     inputs = Input(shape=input_shape)
-    x = ConvLSTM2D(filters=2, kernel_size=(5, 5), activation="tanh", recurrent_dropout=0.2, return_sequences=True)(inputs)
+    x = ConvLSTM2D(filters=4, kernel_size=(5, 5), activation="tanh", recurrent_dropout=0.2, return_sequences=True)(inputs)
     x = MaxPooling3D(pool_size=(2, 2, 2))(x)
     x = Flatten()(x)
     x = Dense(4, activation="relu")(x)
