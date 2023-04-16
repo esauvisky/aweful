@@ -144,4 +144,4 @@ def main(use_wandb):
 
 
 if __name__ == "__main__":
-    main(use_wandb=False)
+    main(use_wandb=True)
