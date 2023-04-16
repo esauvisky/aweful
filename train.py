@@ -55,6 +55,7 @@ def main(use_wandb):
     tf.config.experimental.set_memory_growth(gpus[0], True)
     policy = mixed_precision.Policy('mixed_float16')
     mixed_precision.set_global_policy(policy)
+    tf.keras.backend.clear_session()
 
     # Create the model
     input_shape = (SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1)
