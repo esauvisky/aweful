@@ -71,17 +71,24 @@ def main(use_wandb):
                 "batch_size": BATCH_SIZE,},
         )
 
-    with tf.device("CPU"):
-        # Call the new function with the appropriate key
-        X, y = load_individual_data("raw")
-        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, shuffle=True)
+    # with tf.device("CPU"):
+    train_size = get_generator_sizes("raw", validation=False)
+    train_size = train_size[1] - train_size[0]
 
-        train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train))
-        train_dataset = train_dataset.shuffle(buffer_size=len(X_train)).batch(BATCH_SIZE)
-        train_dataset = train_dataset.prefetch(tf.data.experimental.AUTOTUNE)
-        val_dataset = tf.data.Dataset.from_tensor_slices((X_val, y_val))
-        val_dataset = val_dataset.shuffle(buffer_size=len(X_val)).batch(BATCH_SIZE)
-        val_dataset = val_dataset.prefetch(tf.data.experimental.AUTOTUNE)
+    val_size = get_generator_sizes("raw", validation=True)
+    val_size = val_size[1] - val_size[0]
+
+    output_signature = (tf.TensorSpec(shape=(SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1), dtype=tf.float32),
+                        tf.TensorSpec(shape=(), dtype=tf.int8))
+
+    train_dataset = tf.data.Dataset.from_generator(
+        lambda: load_sequences("raw", validation=False),
+        output_signature=output_signature,
+    ).batch(BATCH_SIZE, drop_remainder=True).shuffle(buffer_size=train_size).prefetch(tf.data.experimental.AUTOTUNE)
+    val_dataset = tf.data.Dataset.from_generator(
+        lambda: load_sequences("raw", validation=True),
+        output_signature=output_signature,
+    ).batch(BATCH_SIZE, drop_remainder=True).prefetch(tf.data.experimental.AUTOTUNE)
 
     callbacks = [
         EarlyStopping(monitor="val_accuracy", patience=5, restore_best_weights=False),
