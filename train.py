@@ -117,18 +117,16 @@ def main(use_wandb):
     model.save_weights(FILENAME)
     logger.info("Saved model weights")
 
-    for index in range(0, 1000):
-        # picks a random X value
-        # index = random.randint(0, len(X) - 1)
-        X_predict = X[index:index + 1]
-        y_predict = y[index:index + 1]
-        y_out = model.predict(X_predict, verbose=0)
-        y_out = np.round(y_out).flatten().astype(int)
-        for n, cat in enumerate(y_out):
-            prediction = "🆙" if cat == 0 else "💤"
-            if y_predict[n] != cat: color = "\033[91m"
-            else: color = "\033[92m" if cat == 0 else "\033[93m"
-            print(color + f"{index:05d}:" + str(prediction) + "\033[0m", end="\t ")
+    # for index in range(0, 1000):
+    #     # picks a random X value
+    #     # index = random.randint(0, len(X) - 1)
+    #     y_out = model.predict(train_dataset, verbose=0)
+    #     y_out = np.round(y_out).flatten().astype(int)
+    #     for n, cat in enumerate(y_out):
+    #         prediction = "🆙" if cat == 0 else "💤"
+    #         if y_predict[n] != cat: color = "\033[91m"
+    #         else: color = "\033[92m" if cat == 0 else "\033[93m"
+    #         print(color + f"{index:05d}:" + str(prediction) + "\033[0m", end="\t ")
 
     if use_wandb:
         wandb.finish()
