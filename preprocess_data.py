@@ -169,6 +169,7 @@ def process_data(input_path):
             total=len(oversampled_sequences) - SEQUENCE_LENGTH,
             smoothing=0.1,
             desc="Processing images...",
+            position=0,
         )
 
         # Submit the tasks to the executor
