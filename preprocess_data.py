@@ -189,23 +189,24 @@ def process_data(input_path):
 
             if progress_bar.n % (500+offset) == 0:
                 logger.info("Switching seed for augmentation")
-                SEED = np.random.randint(0, 1000000)
+                set_seed(np.random.randint(0, 1000000))
 
             progress_bar.update(1)
 
         progress_bar.close()
 
     # logger.info(f"X_aug shape: {X_aug.shape}")
+    logger.info("Concatenating...")
     X = np.concatenate((X, X_aug))
     y = np.concatenate((y, y))
-    logger.info(f"X shape: {X.shape}")
-    logger.info(f"y shape: {y.shape}")
+    logger.info(f"X_aug size: {len(X_aug)} | X Actual: {len(X)} | Overlook sequences: {len(oversampled_sequences) - SEQUENCE_LENGTH}")
+    logger.info(f"y size: {len(y)} | Classes: {np.unique(y)} | Counts: {np.bincount(y)}")
     return X, y
 
 
 def load_individual_data(key):
     input_dir = os.path.join("./prep/", key)
-    num_files = len(os.listdir(input_dir)) // 20
+    num_files = len(os.listdir(input_dir)) // 2
 
     # Initialize empty arrays for sequences and labels
     sequences = []
