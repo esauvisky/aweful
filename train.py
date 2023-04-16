@@ -4,6 +4,8 @@ import multiprocessing
 import os
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+from wandb_custom import CustomEpochEndWandbCallback
+
 import sys
 
 import numpy as np
@@ -14,11 +16,11 @@ from keras.layers import ConvLSTM2D, Dense, Flatten, Input, MaxPooling3D
 from keras.models import Model
 from keras.optimizers import Adam
 from loguru import logger
-from wandb.keras import WandbCallback
+from wandb.keras import WandbCallback, WandbMetricsLogger
 
 import wandb
 from hyperparameters import (BATCH_SIZE, DEBUG, EPOCHS, FILENAME, IMAGE_HEIGHT, IMAGE_WIDTH, LEARNING_RATE, PATIENCE, SEQUENCE_LENGTH)
-from preprocess_data import (get_generator_idxs, load_sequences)
+from preprocess_data import get_generator_idxs, load_sequences
 
 
 def setup_logging(level="DEBUG", show_module=False):
@@ -71,73 +73,58 @@ def main(use_wandb):
                 "batch_size": BATCH_SIZE,},
         )
 
-    with tf.device("CPU"):
-        train_idxs = get_generator_idxs("raw", datatype="train")
-        train_size = len(train_idxs)
+    # with tf.device("CPU"):
+    train_idxs = get_generator_idxs("raw", datatype="train")
+    train_size = len(train_idxs)
 
-        val_idxs = get_generator_idxs("raw", datatype="val")
-        val_size = len(val_idxs)
+    val_idxs = get_generator_idxs("raw", datatype="val")
+    val_size = len(val_idxs)
 
-        wandb_idxs = get_generator_idxs("raw", datatype="wandb")
-        wandb_size = len(wandb_idxs)
+    output_signature = (tf.TensorSpec(shape=(SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1), dtype=tf.float32),
+                        tf.TensorSpec(shape=(), dtype=tf.int32))
 
-        output_signature = (tf.TensorSpec(shape=(SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1), dtype=tf.float32),
-                            tf.TensorSpec(shape=(), dtype=tf.int8))
+    train_dataset = tf.data.Dataset.from_generator(
+        lambda: load_sequences("raw", datatype="train"),
+        output_signature=output_signature,
+    ).batch(BATCH_SIZE, drop_remainder=True).prefetch(tf.data.experimental.AUTOTUNE)
+    val_dataset = tf.data.Dataset.from_generator(
+        lambda: load_sequences("raw", datatype="val"),
+        output_signature=output_signature,
+    ).batch(BATCH_SIZE, drop_remainder=True).prefetch(tf.data.experimental.AUTOTUNE)
 
-        train_dataset = tf.data.Dataset.from_generator(
-            lambda: load_sequences("raw", datatype="train"),
-            output_signature=output_signature,
-        ).batch(BATCH_SIZE, drop_remainder=True).shuffle(buffer_size=train_size).prefetch(tf.data.experimental.AUTOTUNE)
-        val_dataset = tf.data.Dataset.from_generator(
-            lambda: load_sequences("raw", datatype="val"),
-            output_signature=output_signature,
-        ).batch(BATCH_SIZE, drop_remainder=True).prefetch(tf.data.experimental.AUTOTUNE)
+    callbacks = [
+        EarlyStopping(monitor="val_accuracy", patience=10, restore_best_weights=False),
+        ModelCheckpoint(FILENAME, monitor="val_accuracy", save_best_only=True, verbose=1)]
 
-        callbacks = [
-            EarlyStopping(monitor="val_accuracy", patience=10, restore_best_weights=False),
-            ModelCheckpoint(FILENAME, monitor="val_accuracy", save_best_only=True, verbose=1)]
+    if use_wandb:
+        wandb_data = list(load_sequences("raw", datatype="wandb"))
+        X_wandb = [d[0] for d in wandb_data]
+        y_wandb = [d[1] for d in wandb_data]
+        callbacks.append(CustomEpochEndWandbCallback(X_wandb=X_wandb, y_wandb=y_wandb))
 
-        if use_wandb:
-            # callbacks.insert(0, CustomBatchEndCallback(None, None))
-            callbacks.insert(0, WandbCallback(log_evaluation=True,
-                                              # log_weights=True,
-                                              # log_gradients=True,
-                                              generator=load_sequences("raw", datatype="wandb"),
-                                              output_type='label',
-                                              labels=["Awake", "Sleeping"],
-                                              validation_row_processor=lambda ndx, row: {"vid": wandb.Image(row["input"][0])},
-                                              validation_steps=5,
-                                              verbose=0,
-                                              # log_batch_frequency=train_size // BATCH_SIZE // 10,
-                                              # log_evaluation_frequency=train_size // BATCH_SIZE // 10,
-                                              # log_weights_frequency=train_size // BATCH_SIZE // 10,
-                                              save_model=False)) # yapf: disable
+        callbacks.append(WandbMetricsLogger())
+        # callbacks.insert(0, WandbCallback(log_evaluation=True,
+        #                                   generator=load_sequences("raw", datatype="wandb"),
+        #                                   validation_steps=wandb_size // BATCH_SIZE,
+        #                                   predictions=10,
+        #                                   prediction_row_processor=lambda ndx, row: {"imgs": [wandb.Image(img) for img in row["input"]]},
+        #                                   log_evaluation_frequency=1,
+        #                                   verbose=2,
+        #                                   save_model=False)) # yapf: disable
 
-    with tf.device("GPU"):
-        logger.info("Training model...")
-        model.fit(train_dataset,
-                  epochs=EPOCHS,
-                  callbacks=callbacks,
-                  validation_data=val_dataset,
-                  use_multiprocessing=True,
-                  max_queue_size=multiprocessing.cpu_count(),
-                  workers=multiprocessing.cpu_count(),
-                  verbose=1)
+    # with tf.device("GPU"):
+    logger.info("Training model...")
+    os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'
+    model.fit(train_dataset,
+                epochs=EPOCHS,
+                callbacks=callbacks,
+                validation_data=val_dataset,
+                validation_steps=val_size // BATCH_SIZE,
+                verbose=1)
 
     # Save the model weights
     model.save_weights(FILENAME)
     logger.info("Saved model weights")
-
-    # for index in range(0, 1000):
-    #     # picks a random X value
-    #     # index = random.randint(0, len(X) - 1)
-    #     y_out = model.predict(train_dataset, verbose=0)
-    #     y_out = np.round(y_out).flatten().astype(int)
-    #     for n, cat in enumerate(y_out):
-    #         prediction = "🆙" if cat == 0 else "💤"
-    #         if y_predict[n] != cat: color = "\033[91m"
-    #         else: color = "\033[92m" if cat == 0 else "\033[93m"
-    #         print(color + f"{index:05d}:" + str(prediction) + "\033[0m", end="\t ")
 
     if use_wandb:
         wandb.finish()

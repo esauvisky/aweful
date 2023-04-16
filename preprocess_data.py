@@ -33,7 +33,7 @@ def simulate_panning(images, seed):
     augmented_image_iterator = datagen.flow(images, batch_size=len(images), seed=seed)
 
     # Get the augmented images from the iterator
-    augmented_images = next(augmented_image_iterator).astype(np.uint8)
+    augmented_images = next(augmented_image_iterator).astype(np.int32)
 
     return augmented_images
 
@@ -192,7 +192,7 @@ def process_data(input_path):
 
 def load_individual_data(key):
     input_dir = os.path.join("./prep/", key)
-    num_files = len(os.listdir(input_dir)) // 2
+    num_files = len(os.listdir(input_dir)) // 20
 
     # Initialize empty arrays for sequences and labels
     sequences = []
@@ -208,13 +208,13 @@ def load_individual_data(key):
         labels.append(np.load(label_file))
 
     sequences = np.array(sequences, dtype=np.float16)
-    labels = np.array(labels, dtype=np.int8)
+    labels = np.array(labels, dtype=np.int32)
     return sequences, labels
 
 
 def load_individual_file(input_dir, idx):
     sequence_file = os.path.join(input_dir, f"sequence_{idx}.npz")
-    sequence = np.load(sequence_file)["sequence"]
+    sequence = np.load(sequence_file)["sequence"] # TODO: check if we need to / 255.0
 
     label_file = os.path.join(input_dir, f"label_{idx}.npy")
     label = np.load(label_file)
@@ -238,9 +238,9 @@ def get_generator_idxs(key, datatype):
     if datatype == "val":
         return range(0, int(num_files * 0.25))
     elif datatype == "wandb":
-        return np.random.permutation(range(0, num_files))[:10]
+        return np.random.permutation(range(0, num_files))[:BATCH_SIZE * 3]
     elif datatype == "train":
-        return range(int(num_files * 0.25), num_files)
+        return np.random.permutation(range(int(num_files * 0.25), num_files))[:1000]
     else:
         raise ValueError("Incorrect datatype for generator: {}".format(datatype))
 
