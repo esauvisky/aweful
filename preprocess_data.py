@@ -271,7 +271,7 @@ def save_data(key):
             desc="Saving data...",
         )
 
-        for future in as_completed(save_futures):
+        for _ in as_completed(save_futures):
             progress_bar.update(1)
 
         progress_bar.close()
