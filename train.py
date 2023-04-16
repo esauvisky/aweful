@@ -15,14 +15,11 @@ from keras.layers import ConvLSTM2D, Dense, Flatten, Input, MaxPooling3D
 from keras.models import Model
 from keras.optimizers import Adam
 from loguru import logger
-from sklearn.metrics import classification_report, confusion_matrix
-from sklearn.model_selection import train_test_split
 from wandb.keras import WandbCallback
 
 import wandb
 from hyperparameters import (BATCH_SIZE, DEBUG, EPOCHS, FILENAME, IMAGE_HEIGHT, IMAGE_WIDTH, LEARNING_RATE, PATIENCE, SEQUENCE_LENGTH)
-from preprocess_data import load_individual_data
-from wandb_custom import CustomBatchEndCallback
+from preprocess_data import (get_generator_sizes, load_sequences)
 
 
 def setup_logging(level="DEBUG", show_module=False):
