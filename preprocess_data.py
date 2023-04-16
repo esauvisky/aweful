@@ -262,8 +262,10 @@ def get_generator_idxs(key, datatype):
 def save_single_data(sequence, label, index, key):
     output_dir = os.path.join("./prep/", key)
 
-    if not os.path.exists(output_dir):
+    try:
         os.makedirs(output_dir)
+    except FileExistsError:
+        pass
 
     sequence_file = os.path.join(output_dir, f"sequence_{index}.npz")
     label_file = os.path.join(output_dir, f"label_{index}.npy")
