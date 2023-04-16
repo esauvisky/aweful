@@ -63,11 +63,8 @@ def simulate_panning(images):
 def show_image(image):
     # Read the input image
     # image = cv2.imread(image, cv2.IMREAD_GRAYSCALE)
-    if image.dtype != np.uint8:
-        image = (image * 255).astype(np.uint8)
-
-    # Convert the standardized image to the uint8 format
-    image = ((image - image.min()) / (image.max() - image.min()) * 255).astype(np.uint8)
+    if image.dtype != np.int32:
+        image = (image * 255).astype(np.int32)
 
     # Remove the extra dimension
     image = np.squeeze(image, axis=-1)
@@ -102,7 +99,7 @@ def adjust_gamma(image, gamma=1.0):
     # build a lookup table mapping the pixel values [0, 255] to
     # their adjusted gamma values
     invGamma = 1.0 / gamma
-    table = np.array([((i / 255.0)**invGamma) * 255 for i in np.arange(0, 256)]).astype("uint8")
+    table = np.array([((i / 255.0)**invGamma) * 255 for i in np.arange(0, 256)])
     # apply gamma correction using the lookup table
     return cv2.LUT(image, table)
 
@@ -134,18 +131,15 @@ def process_image_sequence(image_files, images_path, image_height, image_width):
 
     augmented_sequence = simulate_panning(sequence)
 
-    # sequence = np.array(sequence).astype(np.float64) / 255.0
-    # augmented_sequence = np.array(augmented_sequence).astype(np.float64) / 255.0
-
     return sequence, augmented_sequence, labels[-1]
 
 
-def process_data(input_path):
+def process_data(input_dir):
     global SEED
     X, X_aug, y = [], [], []
 
     # Get the list of image files
-    image_files = sorted((file for file in os.listdir(input_path) if file.endswith(".jpg")),
+    image_files = sorted((file for file in os.listdir(input_dir) if file.endswith(".jpg")),
                          key=lambda x: int(x.split(".")[0].split("-")[0]))
 
     minority_image_files = [file for file in image_files if "sleep" in file]
@@ -239,7 +233,7 @@ def load_individual_data(key):
 
 def load_individual_file(input_dir, idx):
     sequence_file = os.path.join(input_dir, f"sequence_{idx}.npz")
-    sequence = np.load(sequence_file)["sequence"] # Using standardization in the process_images func already / 255.0
+    sequence = (np.load(sequence_file)["sequence"]).astype(np.float32)
 
     label_file = os.path.join(input_dir, f"label_{idx}.npy")
     label = np.load(label_file)
@@ -287,24 +281,22 @@ def save_single_data(sequence, label, index, key):
 
 def save_data(key):
     sequences, augmented_sequences, labels = process_data(f"./data/{key}")
+    sequences = sequences
+    augmented_sequences = augmented_sequences
 
     table = wandb.Table(columns=["label", "video"])
     for ix in random.sample(range(0, len(sequences)), 10):
-        sequence = sequences[ix]
-        augmented_sequence = augmented_sequences[ix]
-
         def get_video(seq):
-            seq = np.array(seq)
             # Convert the array to the uint8 data type
-            video_uint8 = (seq * 255).astype(np.uint8)
+            # video_uint8 = np.array(seq).astype(np.uint8)
             # Remove the extra dimension (8, 240, 320)
-            video_squeezed = np.squeeze(video_uint8, axis=-1)
+            video_squeezed = np.squeeze(seq, axis=-1)
             # Repeat the channel dimension 3 times to simulate an RGB image (8, 3, 240, 320)
             video_rgb = np.repeat(video_squeezed[:, np.newaxis, :, :], 3, axis=1)
             return wandb.Video(video_rgb, fps=4)
 
-        table.add_data(labels[ix], get_video(sequence))
-        table.add_data(labels[ix], get_video(augmented_sequence))
+        table.add_data(labels[ix], get_video(sequences[ix]))
+        table.add_data(labels[ix], get_video(augmented_sequences[ix]))
 
     wandb.log({key: table})
 
