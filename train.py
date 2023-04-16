@@ -82,7 +82,7 @@ def main(use_wandb):
     val_size = len(val_idxs)
 
     output_signature = (tf.TensorSpec(shape=(SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1), dtype=tf.float32),
-                        tf.TensorSpec(shape=(), dtype=tf.int32))
+                        tf.TensorSpec(shape=(), dtype=tf.uint8))
 
     train_dataset = tf.data.Dataset.from_generator(
         lambda: load_sequences("raw", datatype="train"),

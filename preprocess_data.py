@@ -221,7 +221,7 @@ def load_individual_data(key):
         label_file = os.path.join(input_dir, f"label_{i}.npy")
         labels.append(np.load(label_file))
 
-    sequences = np.array(sequences, dtype=np.float16)
+    sequences = np.array(sequences, dtype=np.float32)
     labels = np.array(labels, dtype=np.int32)
     return sequences, labels
 
@@ -312,7 +312,6 @@ def save_data(key):
             progress_bar.update(1)
 
         progress_bar.close()
-
 
 if __name__ == "__main__":
     wandb.init(project="aweful-preprocess")
