@@ -95,25 +95,23 @@ def main(use_wandb):
         ModelCheckpoint(FILENAME, monitor="val_accuracy", save_best_only=True, verbose=1)]
 
     if use_wandb:
-        callbacks.insert(0, CustomBatchEndCallback(X, y))
+        # callbacks.insert(0, CustomBatchEndCallback(None, None))
         callbacks.insert(0, WandbCallback(log_weights=True,
                                           log_evaluation=True,
-                                          log_batch_frequency=len(X_train) / BATCH_SIZE / 10,
-                                          log_evaluation_frequency=len(X_train) / BATCH_SIZE / 10,
-                                          log_weights_frequency=len(X_train) / BATCH_SIZE / 10,
+                                          log_batch_frequency=train_size // BATCH_SIZE // 10,
+                                          log_evaluation_frequency=train_size // BATCH_SIZE // 10,
+                                          log_weights_frequency=train_size // BATCH_SIZE // 10,
                                           save_model=False)) # yapf: disable
 
-    with tf.device("GPU"):
-        logger.info("Training model...")
-        model.fit(train_dataset, epochs=EPOCHS, callbacks=callbacks, validation_data=val_dataset, verbose=1)
-
-    # Make predictions on the test set
-    y_pred = model.predict(X_val)
-    y_pred_classes = np.round(y_pred)
-
-    # Evaluate the model performance
-    logger.info("\nConfusion matrix:\n" + str(confusion_matrix(y_val, y_pred_classes)))
-    logger.info("\nClassification report:\n" + str(classification_report(y_val, y_pred_classes)))
+    # with tf.device("GPU"):
+    logger.info("Training model...")
+    model.fit(train_dataset,
+              epochs=EPOCHS,
+              callbacks=callbacks,
+              validation_data=val_dataset,
+              verbose=1,
+              use_multiprocessing=True,
+              workers=multiprocessing.cpu_count())
 
     # Save the model weights
     model.save_weights(FILENAME)
