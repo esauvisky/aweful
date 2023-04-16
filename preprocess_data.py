@@ -108,23 +108,18 @@ def get_image(image_path, image_height, image_width):
     image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
     image = image[0:image.shape[0] - 21, 0:image.shape[1]]
     image = cv2.resize(image, (image_width, image_height))
-    # kernel1 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    # close = cv2.morphologyEx(image, cv2.MORPH_CLOSE, kernel1)
-    # image = image / close
-    # image = cv2.normalize(image, image, 0, 255, cv2.NORM_MINMAX)
     image = np.expand_dims(image, axis=-1) # Add an extra channel dimension
-
     return image
 
 
-def process_image_sequence(image_files, images_path, image_height, image_width):
+def process_image_sequence(image_files, images_dir, image_height, image_width):
     global SEED
     sequence = []
     augmented_sequence = []
     labels = []
 
     for filename in image_files:
-        image = get_image(os.path.join(images_path, filename), image_height, image_width)
+        image = get_image(os.path.join(images_dir, filename), image_height, image_width)
         label = 1 if "sleep" in filename else 0
         sequence.append(image)
         labels.append(label)
