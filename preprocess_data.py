@@ -322,6 +322,7 @@ def save_data(key):
 
         progress_bar.close()
 
+
 if __name__ == "__main__":
     wandb.init(project="aweful-preprocess")
     gpus = tf.config.list_physical_devices('GPU')
