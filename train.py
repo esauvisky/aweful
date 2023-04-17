@@ -19,7 +19,7 @@ from wandb.keras import WandbCallback, WandbMetricsLogger
 import wandb
 from hyperparameters import (BATCH_SIZE, DEBUG, EPOCHS, FILENAME, IMAGE_HEIGHT,
                              IMAGE_WIDTH, LEARNING_RATE, SEQUENCE_LENGTH, DATASET_NAME)
-from preprocess_data import get_generator_idxs, load_sequences
+from preprocess_data import get_batches, get_sequences
 from wandb_custom import CustomEpochEndWandbCallback
 
 
@@ -38,7 +38,7 @@ def setup_logging(level="DEBUG", show_module=False):
 def create_model(input_shape):
     """Create a ConvLSTM model."""
     inputs = Input(shape=input_shape)
-    x = ConvLSTM2D(filters=4, kernel_size=(5, 5), activation="tanh", recurrent_dropout=0.2, return_sequences=True)(inputs)
+    x = ConvLSTM2D(filters=4, kernel_size=(2, 2), activation="tanh", recurrent_dropout=0.2, return_sequences=True)(inputs)
     x = MaxPooling3D(pool_size=(2, 2, 2))(x)
     x = Flatten()(x)
     x = Dense(4, activation="relu")(x)
@@ -75,31 +75,27 @@ def main(use_wandb):
         )
 
     with tf.device("CPU"):
-        train_idxs = get_generator_idxs(DATASET_NAME, datatype="train")
-        train_size = len(train_idxs)
+        # train_dataset = tf.data.Dataset.from_generator(
+        #     lambda: get_batches(BATCH_SIZE, random=True),
+        #     output_types=(tf.uint8, tf.int32),
+        #     output_shapes=((BATCH_SIZE, SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1), (BATCH_SIZE,))
+        # )
 
-        val_idxs = get_generator_idxs(DATASET_NAME, datatype="val")
-        val_size = len(val_idxs)
+        train_dataset = list(get_sequences(random=True, split_ratio=0.25))
+        X_train = np.array([d[0] for d in train_dataset])
+        y_train = np.array([d[1] for d in train_dataset])
 
-        output_signature = (tf.TensorSpec(shape=(SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1), dtype=tf.float16),
-                            tf.TensorSpec(shape=(), dtype=tf.uint8))
-
-        train_dataset = tf.data.Dataset.from_generator(
-            lambda: load_sequences(DATASET_NAME, datatype="train"),
-            output_signature=output_signature,
-        ).batch(BATCH_SIZE, drop_remainder=True).prefetch(tf.data.experimental.AUTOTUNE)
-        val_dataset = tf.data.Dataset.from_generator(
-            lambda: load_sequences(DATASET_NAME, datatype="val"),
-            output_signature=output_signature,
-        ).batch(BATCH_SIZE, drop_remainder=True).prefetch(tf.data.experimental.AUTOTUNE)
+        val_dataset = list(get_sequences(random=True, split_ratio=0.25))
+        X_val = np.array([d[0] for d in val_dataset])
+        y_val = np.array([d[1] for d in val_dataset])
 
         callbacks = [
+            ModelCheckpoint(FILENAME, monitor="val_accuracy", save_best_only=True, verbose=1),
             EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=False),
-            ModelCheckpoint(FILENAME, monitor="val_loss", save_best_only=True, verbose=1),
-            ReduceLROnPlateau(monitor='val_accuracy', factor=0.2, patience=5, min_lr=0.001)]
+            ReduceLROnPlateau(monitor='val_accuracy', factor=0.2, patience=3, min_lr=0.0001)]
 
         if use_wandb:
-            wandb_data = list(load_sequences(DATASET_NAME, datatype="wandb"))
+            wandb_data = list(get_sequences(random=True, split_ratio=0.001))
             X_wandb = [d[0] for d in wandb_data]
             y_wandb = [d[1] for d in wandb_data]
             callbacks.append(CustomEpochEndWandbCallback(X_wandb=X_wandb, y_wandb=y_wandb))
@@ -107,11 +103,11 @@ def main(use_wandb):
 
     with tf.device("GPU"):
         logger.info("Training model...")
-        model.fit(train_dataset,
+        model.fit(X_train, y_train,
+                  batch_size=BATCH_SIZE,
                   epochs=EPOCHS,
                   callbacks=callbacks,
-                  validation_data=val_dataset,
-                  validation_steps=val_size // BATCH_SIZE,
+                  validation_data=(X_val, y_val),
                   verbose=1)
 
     # # Save the model weights

@@ -72,10 +72,10 @@ class CustomEpochEndWandbCallback(Callback):
         data = []
         for n, sequence in enumerate(self.X_wandb):
             label = self.model.predict([np.array([sequence])])[0]
-            data.append(tf.numpy_function(process_predictions, label, Tout=tf.float16))
+            data.append(tf.numpy_function(process_predictions, label, Tout=tf.uint8))
 
         for n, (value, label) in enumerate(data):
-            video_raw = np.array(self.X_wandb[n]) * 255
+            video_raw = np.array(self.X_wandb[n])
             # Convert the array to the uint8 data type
             video_uint8 = video_raw.astype(np.uint8)
             # Remove the extra dimension (8, 240, 320)

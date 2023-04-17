@@ -55,7 +55,7 @@ def simulate_panning(images):
     for image in images:
         augmented_image = datagen.apply_transform(image, transformation_matrix)
         # show_image(augmented_image)
-        augmented_images.append(augmented_image.astype(np.int32))
+        augmented_images.append(augmented_image.astype(np.uint8))
 
     return augmented_images
 
@@ -63,8 +63,8 @@ def simulate_panning(images):
 def show_image(image):
     # Read the input image
     # image = cv2.imread(image, cv2.IMREAD_GRAYSCALE)
-    if image.dtype != np.int32:
-        image = (image * 255).astype(np.int32)
+    # if image.dtype != np.int32:
+    #     image = image.astype(np.int32)
 
     # Remove the extra dimension
     image = np.squeeze(image, axis=-1)
@@ -93,15 +93,6 @@ def random_transform(image, seed):
 
     image = np.expand_dims(image, axis=-1)
     return image
-
-
-def adjust_gamma(image, gamma=1.0):
-    # build a lookup table mapping the pixel values [0, 255] to
-    # their adjusted gamma values
-    invGamma = 1.0 / gamma
-    table = np.array([((i / 255.0)**invGamma) * 255 for i in np.arange(0, 256)])
-    # apply gamma correction using the lookup table
-    return cv2.LUT(image, table)
 
 
 def get_image(image_path, image_height, image_width):
@@ -238,8 +229,8 @@ def load_individual_data(key):
         label_file = os.path.join(input_dir, f"label_{i}.npy")
         labels.append(np.load(label_file))
 
-    sequences = np.array(sequences, dtype=np.float16)
-    labels = np.array(labels, dtype=np.int32)
+    sequences = np.array(sequences, dtype=np.uint8)
+    labels = np.array(labels, dtype=np.uint8)
     return sequences, labels
 
 
@@ -253,39 +244,46 @@ def load_npz_by_idx(input_dir, idx):
     return sequence, label
 
 
-def load_sequences(key, datatype):
-    input_dir = os.path.join("./prep/", key)
-    idxs = get_generator_idxs(key, datatype)
-
-    # Use a ThreadPoolExecutor to process image sequences in parallel
-    # with tf.device("CPU"):
-    with ThreadPoolExecutor(max_workers=THREADS) as executor:
-        futures = [executor.submit(load_npz_by_idx, input_dir, idx) for idx in idxs]
-        # Use as_completed() to process the results as they become available, and update the progress bar
-        for future in as_completed(futures):
-            sequence, label = future.result()
-            sequence = tf.divide(tf.cast(sequence, tf.float32), 255.0)
-            # label = tf.cast(label, tf.uint8)
-            yield sequence, label
-
-
-# Returns a list of sequence indices
-def get_generator_idxs(key, datatype):
-    input_dir = os.path.join("./prep/", key)
+def get_batches(batch_size, random=False, split_ratio=1.0):
+    input_dir = os.path.join("./prep/", DATASET_NAME)
     num_files = len(os.listdir(input_dir)) // 2
-
-    indices = np.random.permutation(range(0, num_files))
-
-    train_end = int(0.75 * num_files)
-
-    if datatype == "val":
-        return indices[train_end:]
-    elif datatype == "wandb":
-        return indices[:10]
-    elif datatype == "train":
-        return indices[:train_end]
+    batch_X, batch_y = [], []
+    if random:
+        indices = np.random.permutation(range(num_files))[0:int(split_ratio * num_files)]
     else:
-        raise ValueError("Incorrect datatype for generator: {}".format(datatype))
+        indices = list(range(num_files))
+
+    for idx in indices:
+        sequence_file = os.path.join(input_dir, f"sequence_{idx}.npz")
+        sequence = np.load(sequence_file)["sequence"]
+
+        label_file = os.path.join(input_dir, f"label_{idx}.npy")
+        label = np.load(label_file)
+
+        batch_X.append(sequence)
+        batch_y.append(label)
+
+        if len(batch_X) == batch_size:
+            yield np.array(batch_X), np.array(batch_y)
+            batch_X, batch_y = [], []
+
+
+def get_sequences(random=False, split_ratio=1.0):
+    input_dir = os.path.join("./prep/", DATASET_NAME)
+    num_files = len(os.listdir(input_dir)) // 2
+    if random:
+        indices = np.random.permutation(range(num_files))[0:int(split_ratio * num_files)]
+    else:
+        indices = list(range(num_files))
+
+    for idx in indices:
+        sequence_file = os.path.join(input_dir, f"sequence_{idx}.npz")
+        sequence = np.load(sequence_file)["sequence"]
+
+        label_file = os.path.join(input_dir, f"label_{idx}.npy")
+        label = np.load(label_file)
+
+        yield sequence, label
 
 
 def save_single_data(sequence, label, index, key):
