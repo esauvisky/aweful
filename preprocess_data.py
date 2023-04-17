@@ -41,8 +41,8 @@ def standardize_inplace(image):
 
 def simulate_panning(images):
     global SEED
-    datagen = ImageDataGenerator(height_shift_range=(-0.18, 0.10),
-                                 width_shift_range=0.1,
+    datagen = ImageDataGenerator(height_shift_range=(-0.1, 0.5),
+                                 width_shift_range=(-0.5, 0.5),
                                  zoom_range=0.05,
                                  fill_mode='reflect')
 
