@@ -221,14 +221,14 @@ def load_individual_data(key):
         label_file = os.path.join(input_dir, f"label_{i}.npy")
         labels.append(np.load(label_file))
 
-    sequences = np.array(sequences, dtype=np.float32)
+    sequences = np.array(sequences, dtype=np.float16)
     labels = np.array(labels, dtype=np.int32)
     return sequences, labels
 
 
-def load_individual_file(input_dir, idx):
+def load_npz_by_idx(input_dir, idx):
     sequence_file = os.path.join(input_dir, f"sequence_{idx}.npz")
-    sequence = (np.load(sequence_file)["sequence"]).astype(np.float32)
+    sequence = np.load(sequence_file)["sequence"]
 
     label_file = os.path.join(input_dir, f"label_{idx}.npy")
     label = np.load(label_file)
@@ -240,8 +240,16 @@ def load_sequences(key, datatype):
     input_dir = os.path.join("./prep/", key)
     idxs = get_generator_idxs(key, datatype)
 
-    for idx in idxs:
-        yield load_individual_file(input_dir, idx)
+    # Use a ThreadPoolExecutor to process image sequences in parallel
+    # with tf.device("CPU"):
+    with ThreadPoolExecutor(max_workers=THREADS) as executor:
+        futures = [executor.submit(load_npz_by_idx, input_dir, idx) for idx in idxs]
+        # Use as_completed() to process the results as they become available, and update the progress bar
+        for future in as_completed(futures):
+            sequence, label = future.result()
+            # sequence = tf.divide(tf.cast(sequence, tf.float16), 255.0)
+            # label = tf.cast(label, tf.uint8)
+            yield sequence, label
 
 
 # Returns a list of sequence indices
