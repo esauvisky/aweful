@@ -88,7 +88,7 @@ def random_transform(image, seed):
     image = cv2.warpAffine(image, rotation_matrix, (image.shape[1], image.shape[0]))
 
     # Apply translation
-    translation_matrix = np.float32([[1, 0, tx], [0, 1, ty]])
+    translation_matrix = np.float16([[1, 0, tx], [0, 1, ty]])
     image = cv2.warpAffine(image, translation_matrix, (image.shape[1], image.shape[0]))
 
     image = np.expand_dims(image, axis=-1)
