@@ -289,6 +289,7 @@ def save_data(key):
 
     table = wandb.Table(columns=["label", "video"])
     for ix in random.sample(range(0, len(sequences)), 10):
+
         def get_video(seq):
             # Convert the array to the uint8 data type
             # video_uint8 = np.array(seq).astype(np.uint8)
