@@ -74,58 +74,48 @@ def main(use_wandb):
                 "batch_size": BATCH_SIZE,},
         )
 
-    # with tf.device("CPU"):
-    train_idxs = get_generator_idxs("raw", datatype="train")
-    train_size = len(train_idxs)
+    with tf.device("CPU"):
+        train_idxs = get_generator_idxs("raw", datatype="train")
+        train_size = len(train_idxs)
 
-    val_idxs = get_generator_idxs("raw", datatype="val")
-    val_size = len(val_idxs)
+        val_idxs = get_generator_idxs("raw", datatype="val")
+        val_size = len(val_idxs)
 
-    output_signature = (tf.TensorSpec(shape=(SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1), dtype=tf.float32),
-                        tf.TensorSpec(shape=(), dtype=tf.uint8))
+        output_signature = (tf.TensorSpec(shape=(SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1), dtype=tf.float16),
+                            tf.TensorSpec(shape=(), dtype=tf.uint8))
 
-    train_dataset = tf.data.Dataset.from_generator(
-        lambda: load_sequences("raw", datatype="train"),
-        output_signature=output_signature,
-    ).batch(BATCH_SIZE, drop_remainder=True).prefetch(tf.data.experimental.AUTOTUNE)
-    val_dataset = tf.data.Dataset.from_generator(
-        lambda: load_sequences("raw", datatype="val"),
-        output_signature=output_signature,
-    ).batch(BATCH_SIZE, drop_remainder=True).prefetch(tf.data.experimental.AUTOTUNE)
+        train_dataset = tf.data.Dataset.from_generator(
+            lambda: load_sequences("raw", datatype="train"),
+            output_signature=output_signature,
+        ).batch(BATCH_SIZE, drop_remainder=True).prefetch(tf.data.experimental.AUTOTUNE)
+        val_dataset = tf.data.Dataset.from_generator(
+            lambda: load_sequences("raw", datatype="val"),
+            output_signature=output_signature,
+        ).batch(BATCH_SIZE, drop_remainder=True).prefetch(tf.data.experimental.AUTOTUNE)
 
-    callbacks = [
-        EarlyStopping(monitor="val_accuracy", patience=10, restore_best_weights=False),
-        ModelCheckpoint(FILENAME, monitor="val_accuracy", save_best_only=True, verbose=1)]
+        callbacks = [
+            EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=False),
+            ModelCheckpoint(FILENAME, monitor="val_accuracy", save_best_only=True, verbose=1)]
 
-    if use_wandb:
-        wandb_data = list(load_sequences("raw", datatype="wandb"))
-        X_wandb = [d[0] for d in wandb_data]
-        y_wandb = [d[1] for d in wandb_data]
-        callbacks.append(CustomEpochEndWandbCallback(X_wandb=X_wandb, y_wandb=y_wandb))
+        if use_wandb:
+            wandb_data = list(load_sequences("raw", datatype="wandb"))
+            X_wandb = [d[0] for d in wandb_data]
+            y_wandb = [d[1] for d in wandb_data]
+            callbacks.append(CustomEpochEndWandbCallback(X_wandb=X_wandb, y_wandb=y_wandb))
+            callbacks.append(WandbMetricsLogger())
 
-        callbacks.append(WandbMetricsLogger())
-        # callbacks.insert(0, WandbCallback(log_evaluation=True,
-        #                                   generator=load_sequences("raw", datatype="wandb"),
-        #                                   validation_steps=wandb_size // BATCH_SIZE,
-        #                                   predictions=10,
-        #                                   prediction_row_processor=lambda ndx, row: {"imgs": [wandb.Image(img) for img in row["input"]]},
-        #                                   log_evaluation_frequency=1,
-        #                                   verbose=2,
-        #                                   save_model=False)) # yapf: disable
+    with tf.device("GPU"):
+        logger.info("Training model...")
+        model.fit(train_dataset,
+                  epochs=EPOCHS,
+                  callbacks=callbacks,
+                  validation_data=val_dataset,
+                  validation_steps=val_size // BATCH_SIZE,
+                  verbose=1)
 
-    # with tf.device("GPU"):
-    logger.info("Training model...")
-    os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'
-    model.fit(train_dataset,
-                epochs=EPOCHS,
-                callbacks=callbacks,
-                validation_data=val_dataset,
-                validation_steps=val_size // BATCH_SIZE,
-                verbose=1)
-
-    # Save the model weights
-    model.save_weights(FILENAME)
-    logger.info("Saved model weights")
+    # # Save the model weights
+    # model.save_weights(FILENAME)
+    # logger.info("Saved model weights")
 
     if use_wandb:
         wandb.finish()
