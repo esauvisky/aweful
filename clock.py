@@ -70,10 +70,10 @@ if __name__ == "__main__":
     images = deque(maxlen=SEQUENCE_LENGTH)
     path = "./data/new/"
     input_shape = (SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1)
-    model = create_model(input_shape)
 
     if os.path.exists(FILENAME):
-        model.load_weights(FILENAME)
+        # load model from file
+        model = tf.keras.models.load_model(FILENAME)
         logger.success(f"Loaded model weights from {FILENAME}")
     else:
         logger.error(f"Could not find file '{FILENAME}'")
