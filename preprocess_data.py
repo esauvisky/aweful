@@ -14,7 +14,7 @@ import tensorflow as tf
 from tqdm.auto import tqdm
 from keras.preprocessing.image import ImageDataGenerator, image_utils
 
-from hyperparameters import SEQUENCE_LENGTH, BATCH_SIZE, IMAGE_HEIGHT, IMAGE_WIDTH, THREADS, EPOCHS, LEARNING_RATE, PATIENCE, DEBUG, FILENAME
+from hyperparameters import SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, THREADS, DATASET_NAME
 
 from skimage import exposure
 SEED = np.random.randint(0, 1000000)
@@ -247,7 +247,7 @@ def load_sequences(key, datatype):
         # Use as_completed() to process the results as they become available, and update the progress bar
         for future in as_completed(futures):
             sequence, label = future.result()
-            # sequence = tf.divide(tf.cast(sequence, tf.float16), 255.0)
+            sequence = tf.divide(tf.cast(sequence, tf.float32), 255.0)
             # label = tf.cast(label, tf.uint8)
             yield sequence, label
 

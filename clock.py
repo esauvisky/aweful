@@ -86,7 +86,7 @@ if __name__ == "__main__":
                        stderr=subprocess.DEVNULL)
 
         sequences = get_image("/tmp/aweful_tmp.jpg", IMAGE_HEIGHT, IMAGE_WIDTH)
-        images.append(sequences / 255.0)
+        images.append(sequences)
 
         if len(images) < SEQUENCE_LENGTH:
             # sleep_counter.append(0)

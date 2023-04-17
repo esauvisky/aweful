@@ -5,7 +5,7 @@ import tensorflow as tf
 
 import wandb
 from keras.callbacks import Callback
-from hyperparameters import SEQUENCE_LENGTH, BATCH_SIZE, IMAGE_HEIGHT, IMAGE_WIDTH, EPOCHS, LEARNING_RATE, PATIENCE, DEBUG, FILENAME
+from hyperparameters import SEQUENCE_LENGTH, BATCH_SIZE
 
 
 def create_wandb_images_table():
@@ -66,7 +66,7 @@ class CustomEpochEndWandbCallback(Callback):
 
         def process_predictions(result):
             y = np.round(result).flatten().astype(int)[0]
-            label = "Awake" if y == 0 else "Sleep"
+            label = "Sleep" if y == 0 else "Awake"
             return np.array([result, label])
 
         data = []
@@ -75,7 +75,7 @@ class CustomEpochEndWandbCallback(Callback):
             data.append(tf.numpy_function(process_predictions, label, Tout=tf.float16))
 
         for n, (value, label) in enumerate(data):
-            video_raw = np.array(self.X_wandb[n])
+            video_raw = np.array(self.X_wandb[n]) * 255
             # Convert the array to the uint8 data type
             video_uint8 = video_raw.astype(np.uint8)
             # Remove the extra dimension (8, 240, 320)
