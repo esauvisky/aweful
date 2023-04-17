@@ -4,23 +4,23 @@ import multiprocessing
 import os
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-from wandb_custom import CustomEpochEndWandbCallback
-
 import sys
 
 import numpy as np
 import tensorflow as tf
 from keras import mixed_precision
-from keras.callbacks import EarlyStopping, ModelCheckpoint
-from keras.layers import ConvLSTM2D, Dense, Flatten, Input, MaxPooling3D
+from keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
+from keras.layers import ConvLSTM2D, Dense, Flatten, Input, MaxPooling3D, MaxPooling2D, LSTM, Conv2D, ConvLSTM2D, Dense, Flatten, Input, LeakyReLU, Reshape, TimeDistributed
 from keras.models import Model
 from keras.optimizers import Adam
 from loguru import logger
 from wandb.keras import WandbCallback, WandbMetricsLogger
 
 import wandb
-from hyperparameters import (BATCH_SIZE, DEBUG, EPOCHS, FILENAME, IMAGE_HEIGHT, IMAGE_WIDTH, LEARNING_RATE, PATIENCE, SEQUENCE_LENGTH)
+from hyperparameters import (BATCH_SIZE, DEBUG, EPOCHS, FILENAME, IMAGE_HEIGHT,
+                             IMAGE_WIDTH, LEARNING_RATE, SEQUENCE_LENGTH, DATASET_NAME)
 from preprocess_data import get_generator_idxs, load_sequences
+from wandb_custom import CustomEpochEndWandbCallback
 
 
 def setup_logging(level="DEBUG", show_module=False):
@@ -75,30 +75,31 @@ def main(use_wandb):
         )
 
     with tf.device("CPU"):
-        train_idxs = get_generator_idxs("raw", datatype="train")
+        train_idxs = get_generator_idxs(DATASET_NAME, datatype="train")
         train_size = len(train_idxs)
 
-        val_idxs = get_generator_idxs("raw", datatype="val")
+        val_idxs = get_generator_idxs(DATASET_NAME, datatype="val")
         val_size = len(val_idxs)
 
         output_signature = (tf.TensorSpec(shape=(SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1), dtype=tf.float16),
                             tf.TensorSpec(shape=(), dtype=tf.uint8))
 
         train_dataset = tf.data.Dataset.from_generator(
-            lambda: load_sequences("raw", datatype="train"),
+            lambda: load_sequences(DATASET_NAME, datatype="train"),
             output_signature=output_signature,
         ).batch(BATCH_SIZE, drop_remainder=True).prefetch(tf.data.experimental.AUTOTUNE)
         val_dataset = tf.data.Dataset.from_generator(
-            lambda: load_sequences("raw", datatype="val"),
+            lambda: load_sequences(DATASET_NAME, datatype="val"),
             output_signature=output_signature,
         ).batch(BATCH_SIZE, drop_remainder=True).prefetch(tf.data.experimental.AUTOTUNE)
 
         callbacks = [
             EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=False),
-            ModelCheckpoint(FILENAME, monitor="val_accuracy", save_best_only=True, verbose=1)]
+            ModelCheckpoint(FILENAME, monitor="val_loss", save_best_only=True, verbose=1),
+            ReduceLROnPlateau(monitor='val_accuracy', factor=0.2, patience=5, min_lr=0.001)]
 
         if use_wandb:
-            wandb_data = list(load_sequences("raw", datatype="wandb"))
+            wandb_data = list(load_sequences(DATASET_NAME, datatype="wandb"))
             X_wandb = [d[0] for d in wandb_data]
             y_wandb = [d[1] for d in wandb_data]
             callbacks.append(CustomEpochEndWandbCallback(X_wandb=X_wandb, y_wandb=y_wandb))

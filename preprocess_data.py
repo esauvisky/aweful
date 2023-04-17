@@ -304,7 +304,7 @@ def save_single_data(sequence, label, index, key):
 
 
 def save_data(key):
-    sequences, augmented_sequences, labels = process_data(f"./data/{key}")
+    sequences, augmented_sequences, labels = process_data(f"./data/raw")
     sequences = sequences
     augmented_sequences = augmented_sequences
 
@@ -349,5 +349,5 @@ if __name__ == "__main__":
     gpus = tf.config.list_physical_devices('GPU')
     logger.info(f"Num GPUs Available: {len(gpus)}")
     tf.config.experimental.set_memory_growth(gpus[0], True)
-    save_data("raw")
+    save_data(DATASET_NAME)
     wandb.finish()
