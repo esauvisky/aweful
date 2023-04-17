@@ -129,6 +129,36 @@ def process_image_sequence(image_files, images_dir, image_height, image_width):
     return sequence, augmented_sequence, labels[-1]
 
 
+def oversample_images(image_files, oversampling_factor):
+    sequences_filenames = []
+    minority_count = 0
+    majority_count = 0
+    for i in range(len(image_files) - SEQUENCE_LENGTH):
+        sequence = image_files[i:i + SEQUENCE_LENGTH]
+        if "sleep" in sequence[-1]:
+            for _ in range(oversampling_factor // 3):
+                minority_count += 1
+                sequences_filenames.append(sequence)
+        elif random.random() < 0.5:
+            majority_count += 1
+            sequences_filenames.append(sequence)
+    return sequences_filenames, minority_count, majority_count
+
+
+def sample_images(image_files):
+    sequences_filenames = []
+    minority_count = 0
+    majority_count = 0
+    for i in range(len(image_files) - SEQUENCE_LENGTH):
+        sequence = image_files[i:i + SEQUENCE_LENGTH]
+        if "sleep" in sequence[-1]:
+            minority_count += 1
+        else:
+            majority_count += 1
+        sequences_filenames.append(sequence)
+    return sequences_filenames, minority_count, majority_count
+
+
 def process_data(input_dir):
     global SEED
     X, X_aug, y = [], [], []
@@ -144,21 +174,8 @@ def process_data(input_dir):
     minority_class_count = len(minority_image_files)
     oversampling_factor = majority_class_count // minority_class_count
 
-    sequences_filenames = []
-    minority_count = 0
-    majority_count = 0
-    for i in range(len(image_files) - SEQUENCE_LENGTH):
-        sequence = image_files[i:i + SEQUENCE_LENGTH]
-        if "sleep" in sequence[-1]:
-            for _ in range(oversampling_factor // 3):
-                minority_count += 1
-                sequences_filenames.append(sequence)
-        elif random.random() < 0.5:
-            majority_count += 1
-            sequences_filenames.append(sequence)
-
-    # remove the final sequences until we have a multiple of the batch size
-    sequences_filenames = sequences_filenames[:len(sequences_filenames) - (len(sequences_filenames) % BATCH_SIZE)]
+    # sequences_filenames, minority_count, majority_count = oversample_images(image_files, oversampling_factor)
+    sequences_filenames, minority_count, majority_count = sample_images(image_files)
 
     logger.info(f"Oversampled sequences: {len(sequences_filenames)}")
     logger.info(f"Minority count: {minority_count}")
