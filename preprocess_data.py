@@ -274,12 +274,16 @@ def get_generator_idxs(key, datatype):
     input_dir = os.path.join("./prep/", key)
     num_files = len(os.listdir(input_dir)) // 2
 
+    indices = np.random.permutation(range(0, num_files))
+
+    train_end = int(0.75 * num_files)
+
     if datatype == "val":
-        return range(0, int(num_files * 0.25))
+        return indices[train_end:]
     elif datatype == "wandb":
-        return np.random.permutation(range(0, num_files))[:BATCH_SIZE * 2]
+        return indices[:10]
     elif datatype == "train":
-        return np.random.permutation(range(int(num_files * 0.25), num_files))
+        return indices[:train_end]
     else:
         raise ValueError("Incorrect datatype for generator: {}".format(datatype))
 
