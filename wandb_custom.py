@@ -61,27 +61,30 @@ class CustomEpochEndWandbCallback(Callback):
 
     def on_epoch_end(self, epoch, logs=None):
         logs = logs or {}
-        table = wandb.Table(columns=["Video", "Prediction", "Actual", "Prediction Weight"])
+        table = wandb.Table(allow_mixed_types=True,
+                            columns=["Index", "Video", "Prediction", "Actual", "Prediction Weight"])
 
         def process_predictions(result):
-            label = "Awake" if np.argmax(result) == 0 else "Sleep"
+            y = np.round(result).flatten().astype(int)[0]
+            label = "Awake" if y == 0 else "Sleep"
             return np.array([result, label])
 
         data = []
         for n, sequence in enumerate(self.X_wandb):
-            prediction = self.model.predict([np.array([sequence])])[0]
-            data.append(tf.numpy_function(process_predictions, prediction, Tout=tf.float32))
+            label = self.model.predict([np.array([sequence])])[0]
+            data.append(tf.numpy_function(process_predictions, label, Tout=tf.float16))
 
-        for n, ((value, prediction), original) in enumerate(zip(data, self.y_wandb)):
-            video_raw = self.X_wandb[n]
+        for n, (value, label) in enumerate(data):
+            video_raw = np.array(self.X_wandb[n])
             # Convert the array to the uint8 data type
-            video_uint8 = (video_raw * 255).astype(np.uint8)
+            video_uint8 = video_raw.astype(np.uint8)
             # Remove the extra dimension (8, 240, 320)
             video_squeezed = np.squeeze(video_uint8, axis=-1)
             # Repeat the channel dimension 3 times to simulate an RGB image (8, 3, 240, 320)
             video_rgb = np.repeat(video_squeezed[:, np.newaxis, :, :], 3, axis=1)
             video = wandb.Video(video_rgb, fps=4)
 
-            table.add_data(video, prediction, original, value)
+            actual_lbl = 'Sleep' if self.y_wandb[n] == 0 else 'Awake'
+            table.add_data(n, video, label, actual_lbl, value)
 
         wandb.log({"Prediction Table": table}, commit=False)
