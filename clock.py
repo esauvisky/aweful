@@ -23,10 +23,35 @@ from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.model_selection import train_test_split
 from wandb.keras import WandbCallback
 
-from preprocess_data import get_image
+from preprocess_data import get_image, load_individual_data
 from wandb_custom import CustomBatchEndCallback
 
-from hyperparameters import SEQUENCE_LENGTH, BATCH_SIZE, IMAGE_HEIGHT, IMAGE_WIDTH, EPOCHS, LEARNING_RATE, PATIENCE, DEBUG, FILENAME
+from hyperparameters import SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, FILENAME, DATASET_NAME
+
+def load_sequences():
+    input_dir = os.path.join("./prep/", DATASET_NAME)
+    num_files = len(os.listdir(input_dir)) // 2
+    for idx in range(num_files):
+        sequence_file = os.path.join(input_dir, f"sequence_{idx}.npz")
+        sequence = np.load(sequence_file)["sequence"]
+
+        label_file = os.path.join(input_dir, f"label_{idx}.npy")
+        label = np.load(label_file)
+        yield (sequence, label)
+
+def test_all_in_order():
+    for index, (X, y) in enumerate(load_sequences()):
+        # picks a random X value
+        # index = random.randint(0, len(X) - 1)
+        y_out = model.predict(np.array([X]), verbose=0)
+        y_out = np.round(y_out).flatten().astype(int)
+        for n, cat in enumerate(y_out):
+            prediction = "🆙" if cat == 0 else "💤"
+            if y != cat:
+                color = "\033[91m"
+            else:
+                color = "\033[92m" if cat == 0 else "\033[93m"
+            print(color + f"{index:05d}:" + str(prediction) + "\033[0m", end="\t ")
 
 from train import create_model
 if __name__ == "__main__":
