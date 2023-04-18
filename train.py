@@ -12,7 +12,7 @@ import numpy as np
 import tensorflow as tf
 from keras import mixed_precision
 from keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
-from keras.layers import ConvLSTM2D, Dense, Flatten, Input, MaxPooling3D, MaxPooling2D, LSTM, Conv2D, ConvLSTM2D, Dense, Flatten, Input, LeakyReLU, Reshape, TimeDistributed, BatchNormalization
+from keras.layers import Dense, ConvLSTM2D, Dropout, Flatten, Input, MaxPooling3D, MaxPooling2D, LSTM, Conv2D, Dense, Flatten, Input, LeakyReLU, Reshape, TimeDistributed, BatchNormalization
 from keras.models import Model
 from keras.optimizers import Adam
 from loguru import logger
@@ -39,10 +39,12 @@ def setup_logging(level="DEBUG", show_module=False):
 def create_model(input_shape):
     """Create a ConvLSTM model."""
     inputs = Input(shape=input_shape)
-    x = ConvLSTM2D(filters=2, kernel_size=(5, 5), activation="tanh", recurrent_dropout=0.2, return_sequences=True)(inputs)
-    # x = MaxPooling3D(pool_size=(2, 2, 2))(x)
+    x = ConvLSTM2D(filters=2, kernel_size=(3, 3), activation="tanh", recurrent_dropout=0.2, return_sequences=True)(inputs)
+    x = MaxPooling3D(pool_size=(2, 2, 2))(x)
+    x = Dropout(0.5)(x)
+    x = TimeDistributed(Flatten())(x)
     x = Flatten()(x)
-    x = Dense(4, activation="relu")(x)
+    x = Dense(64, activation="sigmoid")(x)
     outputs = Dense(1, activation="sigmoid")(x)
     out_model = Model(inputs=inputs, outputs=outputs)
     out_model.summary()
@@ -81,12 +83,12 @@ def main(use_wandb):
     #     output_shapes=((SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1), ())
     # ).batch(BATCH_SIZE).shuffle(10000).prefetch(tf.data.experimental.AUTOTUNE)
 
-    dataset = list(get_sequences(random=True))
+    dataset = list(get_sequences(random=False))
     X_train = np.array([d[0] for d in dataset])
     y_train = np.array([d[1] for d in dataset])
-    # val_dataset = list(get_sequences(random=True, split_ratio=0.5))
-    # X_val = np.array([d[0] for d in val_dataset])
-    # y_val = np.array([d[1] for d in val_dataset])
+    val_dataset = list(get_sequences(random=True, split_ratio=0.25))
+    X_val = np.array([d[0] for d in val_dataset])
+    y_val = np.array([d[1] for d in val_dataset])
 
     # # Calculate class weights
     # class_weights = compute_class_weight('balanced', classes=np.unique(y_train), y=y_train.flatten())
@@ -95,7 +97,7 @@ def main(use_wandb):
     callbacks = [
         ModelCheckpoint(FILENAME, monitor="loss", save_best_only=True, verbose=1),
         # EarlyStopping(monitor="accuracy", patience=10, restore_best_weights=False),
-        ReduceLROnPlateau(monitor='accuracy', factor=0.5, patience=3, min_lr=0.0001)]
+        ReduceLROnPlateau(monitor='accuracy', factor=0.8, patience=3, min_lr=0.00001)]
 
     # if use_wandb:
     #     wandb_data = list(get_sequences(random=True, split_ratio=0.001))

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+import re
 
 import wandb
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -48,14 +49,9 @@ def simulate_panning(images):
 
     # Add an extra dimension for the batch size
     images = np.array(images)
+    transformation_matrix = datagen.get_random_transform(images.shape[1:], SEED)
 
-    transformation_matrix = datagen.get_random_transform(images.shape[1:])
-
-    augmented_images = []
-    for image in images:
-        augmented_image = datagen.apply_transform(image, transformation_matrix)
-        # show_image(augmented_image)
-        augmented_images.append(augmented_image.astype(np.uint8))
+    augmented_images = [datagen.apply_transform(image, transformation_matrix) for image in images]
 
     return augmented_images
 
@@ -103,94 +99,78 @@ def get_image(image_path, image_height, image_width):
     return image
 
 
-def process_image_sequence(image_files, images_dir, image_height, image_width):
+def process_image_sequence(image_files, image_height, image_width):
     global SEED
     sequence = []
     augmented_sequence = []
     labels = []
 
     for filename in image_files:
-        image = get_image(os.path.join(images_dir, filename), image_height, image_width)
+        image = get_image(filename, image_height, image_width)
         label = 1 if "sleep" in filename else 0
         sequence.append(image)
         labels.append(label)
 
-    # augmented_sequence = simulate_panning(sequence)
+    augmented_sequence = simulate_panning(sequence)
 
     return sequence, augmented_sequence, labels[-1]
 
 
-def oversample_images(image_files, oversampling_factor):
-    sequences_filenames = []
-    minority_count = 0
-    majority_count = 0
-    for i in range(len(image_files) - SEQUENCE_LENGTH):
-        sequence = image_files[i:i + SEQUENCE_LENGTH]
-        if "sleep" in sequence[-1]:
-            for _ in range(oversampling_factor // 3):
-                minority_count += 1
-                sequences_filenames.append(sequence)
-        elif random.random() < 0.5:
-            majority_count += 1
-            sequences_filenames.append(sequence)
-    return sequences_filenames, minority_count, majority_count
+def balance_dataset(X, X_aug, y):
 
+    X_balanced, y_balanced = [], []
+    minority_indices = [i for i, label in enumerate(y) if label == 1]
+    majority_indices = [i for i, label in enumerate(y) if label == 0]
 
-def sample_images(image_files):
-    sequences_filenames = []
-    minority_count = 0
-    majority_count = 0
-    for i in range(len(image_files) - SEQUENCE_LENGTH):
-        sequence = image_files[i:i + SEQUENCE_LENGTH]
-        if "sleep" in sequence[-1]:
-            minority_count += 1
-        else:
-            majority_count += 1
-        sequences_filenames.append(sequence)
-    return sequences_filenames, minority_count, majority_count
+    # Determine the number of majority samples to remove
+    num_to_remove = len(majority_indices) - len(minority_indices)
 
-import random
+    # Add augmented minority data if the majority class has more than double the samples
+    if num_to_remove > len(minority_indices):
+        num_to_add = min(num_to_remove - len(minority_indices), len(minority_indices))
+        extra_minority_indices = random.sample(minority_indices, num_to_add)
+        for index in extra_minority_indices:
+            X.append(X_aug[index])
+            y.append(y[index])
+        minority_indices += extra_minority_indices
+
+        # Update majority_indices and num_to_remove after adding elements to X and y
+        majority_indices = [i for i, label in enumerate(y) if label == 0]
+        num_to_remove = len(majority_indices) - len(minority_indices)
+
+    # Randomly remove samples from the majority class
+    majority_indices = random.sample(majority_indices, len(majority_indices) - num_to_remove)
+
+    # Combine minority and majority indices
+    balanced_indices = minority_indices + majority_indices
+    # random.shuffle(balanced_indices)
+
+    for index in balanced_indices:
+        X_balanced.append(X[index])
+        y_balanced.append(y[index])
+
+    return X_balanced, y_balanced
+
 
 def process_data(input_dir):
     global SEED
     X, X_aug, y = [], [], []
 
-    # Get the list of image files
-    image_files = sorted((file for file in os.listdir(input_dir) if file.endswith(".jpg")),
-                         key=lambda x: int(x.split(".")[0].split("-")[0]))
+    def custom_sort(file):
+        numbers = [int(x) for x in re.findall(r'\d+', file)]
+        return numbers
 
-    minority_image_files = [file for file in image_files if "sleep" in file]
-    majority_image_files = [file for file in image_files if "sleep" not in file]
-
-    majority_class_count = len(majority_image_files)
-    minority_class_count = len(minority_image_files)
-
-    # Undersample majority class
-    majority_image_files = random.sample(majority_image_files, minority_class_count)
-
-    # Combine minority and majority image files
-    balanced_image_files = minority_image_files + majority_image_files
-
-    sequences_filenames, minority_count, majority_count = sample_images(balanced_image_files)
-
-    logger.info(f"Balanced sequences: {len(sequences_filenames)}")
-    logger.info(f"Minority count: {minority_count}")
-    logger.info(f"Majority count: {majority_count}")
+    image_files = sorted((os.path.join(input_dir, file) for file in os.listdir(input_dir) if file.endswith(".jpg")),
+                         key=custom_sort)
+    sequences = [image_files[i:i + SEQUENCE_LENGTH] for i in range(len(image_files) - SEQUENCE_LENGTH)]
 
     # Use a ThreadPoolExecutor to process image sequences in parallel
     with ThreadPoolExecutor(max_workers=THREADS) as executor:
         # Create the tqdm progress bar
-        progress_bar = tqdm(total=len(sequences_filenames) - SEQUENCE_LENGTH,
-                            smoothing=0.1,
-                            desc="Processing images...",
-                            position=0,
-                            leave=True)
+        progress_bar = tqdm(total=len(sequences), smoothing=0.1, desc="Processing images...", position=0, leave=True)
 
-        offset = np.random.randint(0, 200)
-        futures = [
-            executor.submit(process_image_sequence, sequences_filenames[i], input_dir, IMAGE_HEIGHT, IMAGE_WIDTH)
-            for i in range(0,
-                           len(sequences_filenames) - SEQUENCE_LENGTH)]
+        offset = np.random.randint(0, 500)
+        futures = [executor.submit(process_image_sequence, s, IMAGE_HEIGHT, IMAGE_WIDTH) for s in sequences]
 
         # Use as_completed() to process the results as they become available, and update the progress bar
         for future in as_completed(futures):
@@ -207,10 +187,11 @@ def process_data(input_dir):
 
         progress_bar.close()
 
-    logger.info(f"X_aug size: {len(X_aug)} | X Actual: {len(X)} | Overlook sequences: {len(sequences_filenames) - SEQUENCE_LENGTH}")
-    logger.info(f"y size: {len(y)} | Classes: {np.unique(y)} | Counts: {np.bincount(y)}")
+    logger.info(f"X_aug size: {len(X_aug)} | X Actual: {len(X)} | Total sequences: {len(sequences) - SEQUENCE_LENGTH}")
+    X, y = balance_dataset(X, X_aug, y)
+    logger.info(f"X_balanced: {len(X)} y size: {len(y)} | Classes: {np.unique(y)} | Counts: {np.bincount(y)}")
 
-    return X, X_aug, y
+    return X, y
 
 
 def load_individual_data(key):
@@ -273,9 +254,9 @@ def get_sequences(random=False, split_ratio=1.0):
     input_dir = os.path.join("./prep/", DATASET_NAME)
     num_files = len(os.listdir(input_dir)) // 2
     if random:
-        indices = np.random.permutation(range(num_files)[0:int(split_ratio * num_files)])
+        indices = np.random.permutation(range(num_files))[0:int(split_ratio * num_files)]
     else:
-        indices = list(range(num_files))
+        indices = list(range(num_files))[0:int(split_ratio * num_files)]
 
     for idx in indices:
         sequence_file = os.path.join(input_dir, f"sequence_{idx}.npz")
@@ -303,7 +284,7 @@ def save_single_data(sequence, label, index, key):
 
 
 def save_data(key):
-    sequences, augmented_sequences, labels = process_data("./data/raw")
+    sequences, labels = process_data("./data/raw")
 
     table = wandb.Table(columns=["label", "video"])
     for ix in random.sample(range(0, len(sequences)), 10):
@@ -325,9 +306,6 @@ def save_data(key):
     with ThreadPoolExecutor(max_workers=THREADS) as executor:
         save_futures = [
             executor.submit(save_single_data, sequences[i], labels[i], i, key) for i in range(len(sequences))]
-        # save_futures += [
-        #     executor.submit(save_single_data, augmented_sequences[i], labels[i]) for i in range(len(augmented_sequences))]
-
         # Show progress using tqdm
         progress_bar = tqdm(
             total=len(save_futures),
@@ -343,8 +321,8 @@ def save_data(key):
 
 if __name__ == "__main__":
     wandb.init(project="aweful-preprocess")
-    gpus = tf.config.list_physical_devices('GPU')
-    logger.info(f"Num GPUs Available: {len(gpus)}")
-    tf.config.experimental.set_memory_growth(gpus[0], True)
+    # gpus = tf.config.list_physical_devices('GPU')
+    # logger.info(f"Num GPUs Available: {len(gpus)}")
+    # tf.config.experimental.set_memory_growth(gpus[0], True)
     save_data(DATASET_NAME)
     wandb.finish()

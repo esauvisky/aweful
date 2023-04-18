@@ -8,10 +8,10 @@ IMAGE_WIDTH = 640 // 10
 # These are linked to the model architecture.
 # You can change them experimentally, as long
 # as the model does not change or you retrain it.
-BATCH_SIZE = 4
+BATCH_SIZE = 1
 EPOCHS = 100
-LEARNING_RATE = 0.01
-THREADS = 16
+LEARNING_RATE = 0.0001
+THREADS = 24
 DEBUG = False
 DATASET_NAME = f'small-{IMAGE_HEIGHT}x{IMAGE_WIDTH}-{SEQUENCE_LENGTH}'
 FILENAME = f'./prep/{DATASET_NAME}.h5'

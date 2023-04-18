@@ -23,14 +23,14 @@ from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.model_selection import train_test_split
 from wandb.keras import WandbCallback
 
-from preprocess_data import get_image, load_individual_data, get_batches
+from preprocess_data import get_image, get_sequences, load_individual_data, get_batches
 from wandb_custom import CustomBatchEndCallback
 
 from hyperparameters import SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, FILENAME, DATASET_NAME
 
 
 def test_all_in_order(batch_size):
-    for index, (X_batch, y_batch) in enumerate(get_batches(batch_size)):
+    for index, (X_batch, y_batch) in enumerate(get_batches(batch_size, True)):
         y_out = model.predict(X_batch, verbose=0)
         y_out = np.round(y_out).flatten().astype(int)
 
@@ -60,37 +60,47 @@ if __name__ == "__main__":
 
     logger.info(f"Starting with index {index}")
 
-    sleep_counter = deque(maxlen=6 * 60)
-    images = deque(maxlen=SEQUENCE_LENGTH)
+    sleep_counter = list()
+    images = list()
     path = "./data/new/"
     input_shape = (SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1)
 
+    model = create_model(input_shape)
     if os.path.exists(FILENAME):
         # load model from file
-        model = tf.keras.models.load_model(FILENAME)
+        model = model.load_weights(FILENAME)
         logger.success(f"Loaded model weights from {FILENAME}")
     else:
         logger.error(f"Could not find file '{FILENAME}'")
         sys.exit(1)
 
-    test_all_in_order(16)
+    # test_all_in_order(32)
+
+    dataset = list(get_sequences(random=True))
+    X_train = np.array([d[0] for d in dataset])
+    y_train = np.array([d[1] for d in dataset])
     while True:
+        if len(sleep_counter) >= 6 * 60:
+            sleep_counter.pop(0)
+
+        if len(images) >= SEQUENCE_LENGTH:
+            images.pop(0)
+
         subprocess.run(shlex.split("fswebcam /tmp/aweful_tmp.jpg -d /dev/video0 -S2 -F1"),
                        check=False,
                        stdout=subprocess.DEVNULL,
                        stderr=subprocess.DEVNULL)
 
-        sequences = get_image("/tmp/aweful_tmp.jpg", IMAGE_HEIGHT, IMAGE_WIDTH)
-        images.append(sequences)
+        image = get_image("/tmp/aweful_tmp.jpg", IMAGE_HEIGHT, IMAGE_WIDTH)
+        images.append(image)
 
         if len(images) < SEQUENCE_LENGTH:
-            # sleep_counter.append(0)
+            sleep_counter.append(0)
             logger.info(f"No sleep detected {sleep_counter.count(1)} / {len(sleep_counter)}")
             continue
 
-        X_loop = np.array([images])
-        image_utils.save_img("/tmp/test.png", X_loop[0][0])
-        y_loop = model.predict(X_loop, verbose=0)
+        image_utils.save_img("/tmp/test.png", image)
+        y_loop = model.predict(np.array([images]), verbose=2)
         y_loop_class = np.round(y_loop).flatten().astype(int)[0]
 
         date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -98,10 +108,10 @@ if __name__ == "__main__":
 
         if y_loop_class == 1:
             sleep_counter.append(1)
-            logger.warning(f"Sleep detected {sleep_counter.count(1)} / {len(sleep_counter)}: {round(y_loop[0][0]*100, 2)}%")
+            logger.warning(f"Sleep detected {sleep_counter.count(1)}: {y_loop[0][0]*100, 2}%")
         else:
             sleep_counter.append(0)
-            logger.info(f"No sleep detected {sleep_counter.count(1)} / {len(sleep_counter)}: {round(y_loop[0][0]*100, 2)}%")
+            logger.info(f"No sleep detected {sleep_counter.count(1)}: {y_loop[0][0]*100, 2}%")
 
         index += 1
         # copy the image to the data folder
