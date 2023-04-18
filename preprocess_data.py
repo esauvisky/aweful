@@ -115,7 +115,7 @@ def process_image_sequence(image_files, images_dir, image_height, image_width):
         sequence.append(image)
         labels.append(label)
 
-    augmented_sequence = simulate_panning(sequence)
+    # augmented_sequence = simulate_panning(sequence)
 
     return sequence, augmented_sequence, labels[-1]
 
@@ -149,6 +149,7 @@ def sample_images(image_files):
         sequences_filenames.append(sequence)
     return sequences_filenames, minority_count, majority_count
 
+import random
 
 def process_data(input_dir):
     global SEED
@@ -163,12 +164,16 @@ def process_data(input_dir):
 
     majority_class_count = len(majority_image_files)
     minority_class_count = len(minority_image_files)
-    oversampling_factor = majority_class_count // minority_class_count
 
-    # sequences_filenames, minority_count, majority_count = oversample_images(image_files, oversampling_factor)
-    sequences_filenames, minority_count, majority_count = sample_images(image_files)
+    # Undersample majority class
+    majority_image_files = random.sample(majority_image_files, minority_class_count)
 
-    logger.info(f"Oversampled sequences: {len(sequences_filenames)}")
+    # Combine minority and majority image files
+    balanced_image_files = minority_image_files + majority_image_files
+
+    sequences_filenames, minority_count, majority_count = sample_images(balanced_image_files)
+
+    logger.info(f"Balanced sequences: {len(sequences_filenames)}")
     logger.info(f"Minority count: {minority_count}")
     logger.info(f"Majority count: {majority_count}")
 
@@ -202,10 +207,6 @@ def process_data(input_dir):
 
         progress_bar.close()
 
-    # logger.info(f"X_aug shape: {X_aug.shape}")
-    # logger.info("Concatenating...")
-    # X = np.concatenate((X, X_aug))
-    # y = np.concatenate((y, y))
     logger.info(f"X_aug size: {len(X_aug)} | X Actual: {len(X)} | Overlook sequences: {len(sequences_filenames) - SEQUENCE_LENGTH}")
     logger.info(f"y size: {len(y)} | Classes: {np.unique(y)} | Counts: {np.bincount(y)}")
 
@@ -264,7 +265,7 @@ def get_batches(batch_size, random=False, split_ratio=1.0):
         batch_y.append(label)
 
         if len(batch_X) == batch_size:
-            yield np.array(batch_X), np.array(batch_y)
+            yield np.array(batch_X).astype(np.float32), np.array(batch_y).astype(np.float32)
             batch_X, batch_y = [], []
 
 
@@ -272,16 +273,16 @@ def get_sequences(random=False, split_ratio=1.0):
     input_dir = os.path.join("./prep/", DATASET_NAME)
     num_files = len(os.listdir(input_dir)) // 2
     if random:
-        indices = np.random.permutation(range(num_files))[0:int(split_ratio * num_files)]
+        indices = np.random.permutation(range(num_files)[0:int(split_ratio * num_files)])
     else:
         indices = list(range(num_files))
 
     for idx in indices:
         sequence_file = os.path.join(input_dir, f"sequence_{idx}.npz")
-        sequence = np.load(sequence_file)["sequence"]
+        sequence = np.load(sequence_file)["sequence"].astype(np.float32)
 
         label_file = os.path.join(input_dir, f"label_{idx}.npy")
-        label = np.load(label_file)
+        label = np.load(label_file).astype(np.float32)
 
         yield sequence, label
 
@@ -302,9 +303,7 @@ def save_single_data(sequence, label, index, key):
 
 
 def save_data(key):
-    sequences, augmented_sequences, labels = process_data(f"./data/raw")
-    sequences = sequences
-    augmented_sequences = augmented_sequences
+    sequences, augmented_sequences, labels = process_data("./data/raw")
 
     table = wandb.Table(columns=["label", "video"])
     for ix in random.sample(range(0, len(sequences)), 10):
@@ -319,15 +318,15 @@ def save_data(key):
             return wandb.Video(video_rgb, fps=4)
 
         table.add_data(labels[ix], get_video(sequences[ix]))
-        table.add_data(labels[ix], get_video(augmented_sequences[ix]))
+        # table.add_data(labels[ix], get_video(augmented_sequences[ix]))
 
     wandb.log({key: table})
 
     with ThreadPoolExecutor(max_workers=THREADS) as executor:
         save_futures = [
             executor.submit(save_single_data, sequences[i], labels[i], i, key) for i in range(len(sequences))]
-        save_futures += [
-            executor.submit(save_single_data, augmented_sequences[i], labels[i]) for i in range(len(augmented_sequences))]
+        # save_futures += [
+        #     executor.submit(save_single_data, augmented_sequences[i], labels[i]) for i in range(len(augmented_sequences))]
 
         # Show progress using tqdm
         progress_bar = tqdm(

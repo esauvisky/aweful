@@ -23,35 +23,29 @@ from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.model_selection import train_test_split
 from wandb.keras import WandbCallback
 
-from preprocess_data import get_image, load_individual_data
+from preprocess_data import get_image, load_individual_data, get_batches
 from wandb_custom import CustomBatchEndCallback
 
 from hyperparameters import SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, FILENAME, DATASET_NAME
 
-def load_sequences():
-    input_dir = os.path.join("./prep/", DATASET_NAME)
-    num_files = len(os.listdir(input_dir)) // 2
-    for idx in range(num_files):
-        sequence_file = os.path.join(input_dir, f"sequence_{idx}.npz")
-        sequence = np.load(sequence_file)["sequence"]
 
-        label_file = os.path.join(input_dir, f"label_{idx}.npy")
-        label = np.load(label_file)
-        yield (sequence, label)
-
-def test_all_in_order():
-    for index, (X, y) in enumerate(load_sequences()):
-        # picks a random X value
-        # index = random.randint(0, len(X) - 1)
-        y_out = model.predict(np.array([X]), verbose=0)
+def test_all_in_order(batch_size):
+    for index, (X_batch, y_batch) in enumerate(get_batches(batch_size)):
+        y_out = model.predict(X_batch, verbose=0)
         y_out = np.round(y_out).flatten().astype(int)
-        for n, cat in enumerate(y_out):
-            prediction = "🆙" if cat == 0 else "💤"
-            if y != cat:
+
+        for i in range(len(y_batch)):
+            y = y_batch[i]
+            y_pred = y_out[i]
+            prediction = "🆙" if y_pred == 0 else "💤"
+
+            if y != y_pred:
                 color = "\033[91m"
             else:
-                color = "\033[92m" if cat == 0 else "\033[93m"
-            print(color + f"{index:05d}:" + str(prediction) + "\033[0m", end="\t ")
+                color = "\033[92m" if y_pred == 0 else "\033[93m"
+
+            print(color + f"{(index * batch_size) + i:05d}:" + str(prediction) + "\033[0m", end="\t ")
+
 
 from train import create_model
 if __name__ == "__main__":
@@ -79,6 +73,7 @@ if __name__ == "__main__":
         logger.error(f"Could not find file '{FILENAME}'")
         sys.exit(1)
 
+    test_all_in_order(16)
     while True:
         subprocess.run(shlex.split("fswebcam /tmp/aweful_tmp.jpg -d /dev/video0 -S2 -F1"),
                        check=False,

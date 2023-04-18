@@ -62,7 +62,7 @@ class CustomEpochEndWandbCallback(Callback):
     def on_epoch_end(self, epoch, logs=None):
         logs = logs or {}
         table = wandb.Table(allow_mixed_types=True,
-                            columns=["Index", "Video", "Prediction", "Actual", "Prediction Weight"])
+                            columns=["Video", "Prediction", "Actual", "Prediction Weight"])
 
         def process_predictions(result):
             y = np.round(result).flatten().astype(int)[0]
@@ -85,6 +85,6 @@ class CustomEpochEndWandbCallback(Callback):
             video = wandb.Video(video_rgb, fps=4)
 
             actual_lbl = 'Sleep' if self.y_wandb[n] == 0 else 'Awake'
-            table.add_data(n, video, label, actual_lbl, value)
+            table.add_data(video, label, actual_lbl, value)
 
         wandb.log({"Prediction Table": table}, commit=False)
