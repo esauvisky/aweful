@@ -23,31 +23,31 @@ from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.model_selection import train_test_split
 from wandb.keras import WandbCallback
 
-from preprocess_data import get_image, get_sequences, load_individual_data, get_batches
+from preprocess_data import get_image, process_data
 from wandb_custom import CustomBatchEndCallback
 
-from hyperparameters import SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, FILENAME, DATASET_NAME
+from hyperparameters import SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, FILENAME, DATASET_NAME, create_model
 
 
-def test_all_in_order(batch_size):
-    for index, (X_batch, y_batch) in enumerate(get_batches(batch_size, True)):
-        y_out = model.predict(X_batch, verbose=0)
-        y_out = np.round(y_out).flatten().astype(int)
+def test_all_in_order(model):
+    data = process_data("./data/quick")
+    Xx = data[0]
+    yy = data[1]
+    y_out = model.predict(Xx, verbose=1)
+    for i in range(len(yy)):
+        y_pred = np.round(y_out[i])[0].astype(int)
+        prediction = " Awake" if y_pred == 0 else " Sleep"
+        # y_out = model.predict(np.array([Xx[0]]), verbose=0)
+        # y_pred = np.round(y_out).flatten().astype(int)[0]
 
-        for i in range(len(y_batch)):
-            y = y_batch[i]
-            y_pred = y_out[i]
-            prediction = "🆙" if y_pred == 0 else "💤"
+        if y_pred != yy[i]:
+            color = "\033[91m ❌"
+        else:
+            color = "\033[92m ✅"
 
-            if y != y_pred:
-                color = "\033[91m"
-            else:
-                color = "\033[92m" if y_pred == 0 else "\033[93m"
-
-            print(color + f"{(index * batch_size) + i:05d}:" + str(prediction) + "\033[0m", end="\t ")
+        print(color + str(prediction) + "\033[0m\t", end="")
 
 
-from train import create_model
 if __name__ == "__main__":
     index = 0
     # get the latest used index number
@@ -62,23 +62,20 @@ if __name__ == "__main__":
 
     sleep_counter = list()
     images = list()
-    path = "./data/new/"
-    input_shape = (SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1)
+    path = "./data/quick/"
 
-    model = create_model(input_shape)
+    model = create_model()
     if os.path.exists(FILENAME):
         # load model from file
-        model = model.load_weights(FILENAME)
+        # model.load_weights(FILENAME)
+        model = tf.keras.models.load_model(FILENAME)
         logger.success(f"Loaded model weights from {FILENAME}")
     else:
         logger.error(f"Could not find file '{FILENAME}'")
         sys.exit(1)
 
-    # test_all_in_order(32)
+    test_all_in_order(model)
 
-    dataset = list(get_sequences(random=True))
-    X_train = np.array([d[0] for d in dataset])
-    y_train = np.array([d[1] for d in dataset])
     while True:
         if len(sleep_counter) >= 6 * 60:
             sleep_counter.pop(0)
@@ -108,10 +105,10 @@ if __name__ == "__main__":
 
         if y_loop_class == 1:
             sleep_counter.append(1)
-            logger.warning(f"Sleep detected {sleep_counter.count(1)}: {y_loop[0][0]*100, 2}%")
+            logger.warning(f"Sleep detected {sleep_counter.count(1)} / {len(sleep_counter)}: {y_loop[0][0]*100}%")
         else:
             sleep_counter.append(0)
-            logger.info(f"No sleep detected {sleep_counter.count(1)}: {y_loop[0][0]*100, 2}%")
+            logger.info(f"No sleep detected {sleep_counter.count(1)} / {len(sleep_counter)}: {y_loop[0][0]*100}%")
 
         index += 1
         # copy the image to the data folder

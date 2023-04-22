@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 
+import asyncio
+from collections import Counter
 import os
 import re
 
 import wandb
+
+from image_display import display_image_grid_from_arrays
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 import random
@@ -11,14 +15,16 @@ from loguru import logger
 
 import cv2
 import numpy as np
+import matplotlib.pyplot as plt
+from PIL import Image
+import numpy as np
 import tensorflow as tf
 from tqdm.auto import tqdm
 from keras.preprocessing.image import ImageDataGenerator, image_utils
 
-from hyperparameters import SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, THREADS, DATASET_NAME
-
+from hyperparameters import BATCH_SIZE, SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, THREADS, DATASET_NAME
+from skimage.metrics import structural_similarity as ssim
 from skimage import exposure
-SEED = np.random.randint(0, 1000000)
 
 
 def set_seed(seed=0):
@@ -32,36 +38,7 @@ def set_seed(seed=0):
     os.environ['PYTHONHASHSEED'] = str(seed)
 
 
-def standardize_inplace(image):
-    mean = np.mean(image)
-    std = np.std(image)
-    image -= mean
-    image /= std
-    return image
-
-
-def simulate_panning(images):
-    global SEED
-    datagen = ImageDataGenerator(height_shift_range=(-0.1, 0.5),
-                                 width_shift_range=(-0.5, 0.5),
-                                 zoom_range=0.05,
-                                 fill_mode='reflect')
-
-    # Add an extra dimension for the batch size
-    images = np.array(images)
-    transformation_matrix = datagen.get_random_transform(images.shape[1:], SEED)
-
-    augmented_images = [datagen.apply_transform(image, transformation_matrix) for image in images]
-
-    return augmented_images
-
-
 def show_image(image):
-    # Read the input image
-    # image = cv2.imread(image, cv2.IMREAD_GRAYSCALE)
-    # if image.dtype != np.int32:
-    #     image = image.astype(np.int32)
-
     # Remove the extra dimension
     image = np.squeeze(image, axis=-1)
 
@@ -72,23 +49,28 @@ def show_image(image):
     cv2.destroyAllWindows()
 
 
-def random_transform(image, seed):
-    rng = np.random.default_rng(seed)
-    angle = rng.uniform(-5, 5)
-    tx = rng.integers(-10, 11)
-    ty = rng.integers(-10, 11)
+def simulate_panning(images):
+    global SEED
+    datagen = ImageDataGenerator(height_shift_range=0.05, width_shift_range=0.05, fill_mode='reflect')
 
-    # Apply rotation
-    center = (image.shape[1] // 2, image.shape[0] // 2)
-    rotation_matrix = cv2.getRotationMatrix2D(center, angle, 1)
-    image = cv2.warpAffine(image, rotation_matrix, (image.shape[1], image.shape[0]))
+    # Add an extra dimension for the batch size
+    images = np.array(images)
+    transformation_matrix = datagen.get_random_transform(images.shape[1:], SEED)
 
-    # Apply translation
-    translation_matrix = np.float16([[1, 0, tx], [0, 1, ty]])
-    image = cv2.warpAffine(image, translation_matrix, (image.shape[1], image.shape[0]))
+    augmented_images = [datagen.apply_transform(image, transformation_matrix) for image in images]
 
-    image = np.expand_dims(image, axis=-1)
-    return image
+    return augmented_images
+
+
+def show_kmeans_img(img_vect):
+    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
+    ret, label, centroids = cv2.kmeans(img_vect, 3, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
+    centroids = np.uint8(centroids)
+    img_kmeans = centroids[label.flatten()]
+    img_kmeans = img_kmeans.reshape((1680, 1080))
+    return img_kmeans
+    # plt.title("KMeans Segmentation")
+    # plt.imshow(cv2.cvtColor(img_kmeans, cv2.COLOR_GRAY2RGB))
 
 
 def get_image(image_path, image_height, image_width):
@@ -96,233 +78,117 @@ def get_image(image_path, image_height, image_width):
     image = image[0:image.shape[0] - 21, 0:image.shape[1]]
     image = cv2.resize(image, (image_width, image_height))
     image = np.expand_dims(image, axis=-1) # Add an extra channel dimension
-    return image
+    return image / 255.0
 
 
-def process_image_sequence(image_files, image_height, image_width):
-    global SEED
-    sequence = []
-    augmented_sequence = []
-    labels = []
-
-    for filename in image_files:
-        image = get_image(filename, image_height, image_width)
-        label = 1 if "sleep" in filename else 0
-        sequence.append(image)
-        labels.append(label)
-
-    augmented_sequence = simulate_panning(sequence)
-
-    return sequence, augmented_sequence, labels[-1]
+def is_almost_black(image, threshold=10):
+    """Check if the average pixel intensity of an image is below a threshold value."""
+    # Remove the extra dimension
+    image = np.squeeze(image, axis=-1)
+    avg_intensity = np.mean((image * 255).astype(np.uint8))
+    return avg_intensity < threshold
 
 
-def balance_dataset(X, X_aug, y):
+def similarity(image1, image2):
+    # Remove the extra dimensions
+    image1 = (np.squeeze(image1, axis=-1) * 255).astype(np.uint8)
+    image2 = (np.squeeze(image2, axis=-1) * 255).astype(np.uint8)
+    similarity = ssim(image1, image2)
+    return similarity
 
-    X_balanced, y_balanced = [], []
-    minority_indices = [i for i, label in enumerate(y) if label == 1]
-    majority_indices = [i for i, label in enumerate(y) if label == 0]
+def balance_classes(sequences, labels):
+    # Count the occurrences of each label
+    label_counts = Counter(labels)
 
-    # Determine the number of majority samples to remove
-    num_to_remove = len(majority_indices) - len(minority_indices)
+    # Find the major and minor categories
+    major_category = max(label_counts, key=label_counts.get)
+    minor_category = min(label_counts, key=label_counts.get)
 
-    # Add augmented minority data if the majority class has more than double the samples
-    if num_to_remove > len(minority_indices):
-        num_to_add = min(num_to_remove - len(minority_indices), len(minority_indices))
-        extra_minority_indices = random.sample(minority_indices, num_to_add)
-        for index in extra_minority_indices:
-            X.append(X_aug[index])
-            y.append(y[index])
-        minority_indices += extra_minority_indices
+    major_sequences = [seq for seq, label in zip(sequences, labels) if label == major_category]
+    minor_sequences = [seq for seq, label in zip(sequences, labels) if label == minor_category]
 
-        # Update majority_indices and num_to_remove after adding elements to X and y
-        majority_indices = [i for i, label in enumerate(y) if label == 0]
-        num_to_remove = len(majority_indices) - len(minority_indices)
+    # Calculate the value of k to balance the number of items in each category
+    k = label_counts[major_category] // label_counts[minor_category]
 
-    # Randomly remove samples from the majority class
-    majority_indices = random.sample(majority_indices, len(majority_indices) - num_to_remove)
+    # Generate k augmented items for each minor category item
+    transformed_removed_major_sequences = []
+    augmented_minor_sequences = []
+    for seq in minor_sequences:
+        for _ in range(k):
+            augmented_seq = simulate_panning(seq)
+            augmented_minor_sequences.append(augmented_seq)
+            # removes one sequence from original major sequence and
+            # pans it the same way than the minor sequence image above.
+            major_seq = major_sequences.pop(0)
+            transformed_seq = simulate_panning(major_seq)
+            transformed_removed_major_sequences.append(transformed_seq)
 
-    # Combine minority and majority indices
-    balanced_indices = minority_indices + majority_indices
-    # random.shuffle(balanced_indices)
-
-    for index in balanced_indices:
-        X_balanced.append(X[index])
-        y_balanced.append(y[index])
-
-    return X_balanced, y_balanced
-
+    # Combine the major sequences, augmented minor sequences, and transformed removed major sequences
+    balanced_sequences = major_sequences + augmented_minor_sequences + transformed_removed_major_sequences
+    balanced_labels = (
+        [major_category] * len(major_sequences)
+        + [minor_category] * len(augmented_minor_sequences)
+        + [major_category] * len(transformed_removed_major_sequences)
+    )
+    # pairs = list(zip(balanced_sequences, balanced_labels))
+    # random.shuffle(pairs)
+    # balanced_sequences, balanced_labels = zip(*pairs)
+    return balanced_sequences, balanced_labels
 
 def process_data(input_dir):
-    global SEED
-    X, X_aug, y = [], [], []
-
     def custom_sort(file):
         numbers = [int(x) for x in re.findall(r'\d+', file)]
         return numbers
 
     image_files = sorted((os.path.join(input_dir, file) for file in os.listdir(input_dir) if file.endswith(".jpg")),
                          key=custom_sort)
-    sequences = [image_files[i:i + SEQUENCE_LENGTH] for i in range(len(image_files) - SEQUENCE_LENGTH)]
+    # while True:
+    indices = list(range(0, len(image_files) - max(SEQUENCE_LENGTH, BATCH_SIZE)))
+    random.shuffle(indices)
+    sequences = []
+    labels = []
+    skipped = []
+    for st in tqdm(indices):
+        sequence = []
+        for image_file in image_files[st:]:
+            # print(image_file)
+            image = get_image(image_file, IMAGE_HEIGHT, IMAGE_WIDTH)
+            if is_almost_black(image):
+                if image_file in skipped:
+                    logger.info(f"{image_file} is skipped. Skipping")
+                else:
+                    skipped.append(image_file)
+                    logger.info(f"{image_file} is almost entirely black. Skipping")
+                continue
+            elif len(sequence) > 0 and similarity(image, sequence[-1]) < 0.7:
+                if not is_almost_black(sequence[-1]):
+                    logger.info(f"{image_file}: too different with previous ({similarity(image, sequence[-1])})")
+                break
+            sequence.append(image)
+            label = 1 if "sleep" in image_file else 0
+            if len(sequence) == SEQUENCE_LENGTH:
+                break
+        if len(sequence) != SEQUENCE_LENGTH:
+            logger.debug(f"Sequence not enough in length {len(sequence)}, skipping")
+            continue
+        sequences.append(sequence)
+        labels.append(label)
 
-    # Use a ThreadPoolExecutor to process image sequences in parallel
-    with ThreadPoolExecutor(max_workers=THREADS) as executor:
-        # Create the tqdm progress bar
-        progress_bar = tqdm(total=len(sequences), smoothing=0.1, desc="Processing images...", position=0, leave=True)
+        # yield np.array(sequence), label
 
-        offset = np.random.randint(0, 500)
-        futures = [executor.submit(process_image_sequence, s, IMAGE_HEIGHT, IMAGE_WIDTH) for s in sequences]
-
-        # Use as_completed() to process the results as they become available, and update the progress bar
-        for future in as_completed(futures):
-            sequence, augmented_sequence, label = future.result()
-            X.append(sequence)
-            X_aug.append(augmented_sequence)
-            y.append(label)
-
-            if progress_bar.n % (500+offset) == 0:
-                logger.info("Switching seed for augmentation")
-                set_seed(np.random.randint(0, 1000000))
-
-            progress_bar.update(1)
-
-        progress_bar.close()
-
-    logger.info(f"X_aug size: {len(X_aug)} | X Actual: {len(X)} | Total sequences: {len(sequences) - SEQUENCE_LENGTH}")
-    X, y = balance_dataset(X, X_aug, y)
-    logger.info(f"X_balanced: {len(X)} y size: {len(y)} | Classes: {np.unique(y)} | Counts: {np.bincount(y)}")
-
+    X, y = balance_classes(sequences, labels)
+    # X = sequences
+    # y = labels
+    # for ix in range(0, 500, SEQUENCE_LENGTH * 10):
+    #     display_image_grid_from_arrays(sequences_aug[ix:], rows=10)
+    # for ix in range(0, 500, SEQUENCE_LENGTH * 10):
+    #     display_image_grid_from_arrays(sequences[ix:], rows=10)
+    print(f"There are {len(image_files)} images and {len(X)} sequences from which {sum(y)} are label 1 ({sum(y)/len(y)*100:.2f}%)")
+    X = np.array(X, dtype=np.float16)
+    y = np.array(y, dtype=np.float16)
     return X, y
 
 
-def load_individual_data(key):
-    input_dir = os.path.join("./prep/", key)
-    num_files = len(os.listdir(input_dir)) // 2
-
-    # Initialize empty arrays for sequences and labels
-    sequences = []
-    labels = []
-
-    # Iterate over the files and load the data
-    for i in tqdm(range(num_files), desc="Loading data..."):
-        sequence_file = os.path.join(input_dir, f"sequence_{i}.npz")
-        sequences.append(np.load(sequence_file)["sequence"])
-
-    for i in tqdm(range(num_files), desc="Loading labels..."):
-        label_file = os.path.join(input_dir, f"label_{i}.npy")
-        labels.append(np.load(label_file))
-
-    sequences = np.array(sequences, dtype=np.uint8)
-    labels = np.array(labels, dtype=np.uint8)
-    return sequences, labels
-
-
-def load_npz_by_idx(input_dir, idx):
-    sequence_file = os.path.join(input_dir, f"sequence_{idx}.npz")
-    sequence = np.load(sequence_file)["sequence"]
-
-    label_file = os.path.join(input_dir, f"label_{idx}.npy")
-    label = np.load(label_file)
-
-    return sequence, label
-
-
-def get_batches(batch_size, random=False, split_ratio=1.0):
-    input_dir = os.path.join("./prep/", DATASET_NAME)
-    num_files = len(os.listdir(input_dir)) // 2
-    batch_X, batch_y = [], []
-    if random:
-        indices = np.random.permutation(range(num_files))[0:int(split_ratio * num_files)]
-    else:
-        indices = list(range(num_files))
-
-    for idx in indices:
-        sequence_file = os.path.join(input_dir, f"sequence_{idx}.npz")
-        sequence = np.load(sequence_file)["sequence"]
-
-        label_file = os.path.join(input_dir, f"label_{idx}.npy")
-        label = np.load(label_file)
-
-        batch_X.append(sequence)
-        batch_y.append(label)
-
-        if len(batch_X) == batch_size:
-            yield np.array(batch_X).astype(np.float32), np.array(batch_y).astype(np.float32)
-            batch_X, batch_y = [], []
-
-
-def get_sequences(random=False, split_ratio=1.0):
-    input_dir = os.path.join("./prep/", DATASET_NAME)
-    num_files = len(os.listdir(input_dir)) // 2
-    if random:
-        indices = np.random.permutation(range(num_files))[0:int(split_ratio * num_files)]
-    else:
-        indices = list(range(num_files))[0:int(split_ratio * num_files)]
-
-    for idx in indices:
-        sequence_file = os.path.join(input_dir, f"sequence_{idx}.npz")
-        sequence = np.load(sequence_file)["sequence"].astype(np.float32)
-
-        label_file = os.path.join(input_dir, f"label_{idx}.npy")
-        label = np.load(label_file).astype(np.float32)
-
-        yield sequence, label
-
-
-def save_single_data(sequence, label, index, key):
-    output_dir = os.path.join("./prep/", key)
-
-    try:
-        os.makedirs(output_dir)
-    except FileExistsError:
-        pass
-
-    sequence_file = os.path.join(output_dir, f"sequence_{index}.npz")
-    label_file = os.path.join(output_dir, f"label_{index}.npy")
-
-    np.savez_compressed(sequence_file, sequence=sequence)
-    np.save(label_file, label)
-
-
-def save_data(key):
-    sequences, labels = process_data("./data/raw")
-
-    table = wandb.Table(columns=["label", "video"])
-    for ix in random.sample(range(0, len(sequences)), 10):
-
-        def get_video(seq):
-            # Convert the array to the uint8 data type
-            # video_uint8 = np.array(seq).astype(np.uint8)
-            # Remove the extra dimension (8, 240, 320)
-            video_squeezed = np.squeeze(seq, axis=-1)
-            # Repeat the channel dimension 3 times to simulate an RGB image (8, 3, 240, 320)
-            video_rgb = np.repeat(video_squeezed[:, np.newaxis, :, :], 3, axis=1)
-            return wandb.Video(video_rgb, fps=4)
-
-        table.add_data(labels[ix], get_video(sequences[ix]))
-        # table.add_data(labels[ix], get_video(augmented_sequences[ix]))
-
-    wandb.log({key: table})
-
-    with ThreadPoolExecutor(max_workers=THREADS) as executor:
-        save_futures = [
-            executor.submit(save_single_data, sequences[i], labels[i], i, key) for i in range(len(sequences))]
-        # Show progress using tqdm
-        progress_bar = tqdm(
-            total=len(save_futures),
-            smoothing=0.1,
-            desc="Saving data...",
-        )
-
-        for _ in as_completed(save_futures):
-            progress_bar.update(1)
-
-        progress_bar.close()
-
-
+SEED = np.random.randint(0, 1000000)
 if __name__ == "__main__":
-    wandb.init(project="aweful-preprocess")
-    # gpus = tf.config.list_physical_devices('GPU')
-    # logger.info(f"Num GPUs Available: {len(gpus)}")
-    # tf.config.experimental.set_memory_growth(gpus[0], True)
-    save_data(DATASET_NAME)
-    wandb.finish()
+    pass

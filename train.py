@@ -12,15 +12,14 @@ import numpy as np
 import tensorflow as tf
 from keras import mixed_precision
 from keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
-from keras.layers import Dense, ConvLSTM2D, Dropout, Flatten, Input, MaxPooling3D, MaxPooling2D, LSTM, Conv2D, Dense, Flatten, Input, LeakyReLU, Reshape, TimeDistributed, BatchNormalization
-from keras.models import Model
-from keras.optimizers import Adam
+from keras.layers import MaxPooling3D, LSTM, LeakyReLU, Reshape, BatchNormalization
+from keras.optimizers import Adam, SGD
 from loguru import logger
 from wandb.keras import WandbCallback, WandbMetricsLogger
 
 import wandb
-from hyperparameters import (BATCH_SIZE, DEBUG, EPOCHS, FILENAME, IMAGE_HEIGHT, IMAGE_WIDTH, LEARNING_RATE, SEQUENCE_LENGTH, DATASET_NAME)
-from preprocess_data import get_batches, get_sequences
+from hyperparameters import BATCH_SIZE, DEBUG, EPOCHS, FILENAME, IMAGE_HEIGHT, IMAGE_WIDTH, LEARNING_RATE, SEQUENCE_LENGTH, DATASET_NAME, create_model
+from preprocess_data import process_data
 from wandb_custom import CustomEpochEndWandbCallback
 
 
@@ -36,83 +35,45 @@ def setup_logging(level="DEBUG", show_module=False):
     logger.add(sys.stderr, level=log_level, format=log_fmt, colorize=True, backtrace=True, diagnose=True)
 
 
-def create_model(input_shape):
-    """Create a ConvLSTM model."""
-    inputs = Input(shape=input_shape)
-    x = ConvLSTM2D(filters=2, kernel_size=(3, 3), activation="tanh", recurrent_dropout=0.2, return_sequences=True)(inputs)
-    x = MaxPooling3D(pool_size=(2, 2, 2))(x)
-    x = Dropout(0.5)(x)
-    x = TimeDistributed(Flatten())(x)
-    x = Flatten()(x)
-    x = Dense(64, activation="sigmoid")(x)
-    outputs = Dense(1, activation="sigmoid")(x)
-    out_model = Model(inputs=inputs, outputs=outputs)
-    out_model.summary()
-    return out_model
-
-
 def main(use_wandb):
     setup_logging("DEBUG" if DEBUG else "INFO")
     gpus = tf.config.list_physical_devices('GPU')
     logger.info(f"Num GPUs Available: {len(gpus)}")
-    tf.config.experimental.set_memory_growth(gpus[0], True)
-    policy = mixed_precision.Policy('mixed_float16')
-    mixed_precision.set_global_policy(policy)
-    tf.keras.backend.clear_session()
+    # tf.config.experimental.set_memory_growth(gpus[0], True)
+    # policy = mixed_precision.Policy('mixed_float16')
+    # mixed_precision.set_global_policy(policy)
+    # tf.keras.backend.clear_session()
 
     # Create the model
-    input_shape = (SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1)
-    model = create_model(input_shape)
     optimizer = Adam(learning_rate=LEARNING_RATE)
+    model = create_model()
     model.compile(loss="binary_crossentropy", optimizer=optimizer, metrics=["accuracy"])
 
-    if use_wandb:
-        wandb.init(
-            project="aweful-train",
-            config={
-                "optimizer": "adam",
-                "loss": "binary_crossentropy",
-                "metric": "accuracy",
-                "epoch": EPOCHS,
-                "batch_size": BATCH_SIZE,},
-        )
+    # if use_wandb:
+    #     wandb.init(
+    #         project="aweful-train",
+    #         config={
+    #             "optimizer": "adam",
+    #             "loss": "binary_crossentropy",
+    #             "metric": "accuracy",
+    #             "epoch": EPOCHS,
+    #             "batch_size": BATCH_SIZE,},
+    #     )
 
-    # train_dataset = tf.data.Dataset.from_generator(
-    #     lambda: get_sequences(random=True),
-    #     output_types=(tf.float32, tf.uint8),
-    #     output_shapes=((SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1), ())
-    # ).batch(BATCH_SIZE).shuffle(10000).prefetch(tf.data.experimental.AUTOTUNE)
+    # train_dataset = tf.data.Dataset.from_generator(lambda: process_data("./data/quick"),
+    #                                                output_types=(tf.float16, tf.float16),
+    #                                                output_shapes=((SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1), ())).batch(BATCH_SIZE).prefetch(tf.data.experimental.AUTOTUNE)
 
-    dataset = list(get_sequences(random=False))
-    X_train = np.array([d[0] for d in dataset])
-    y_train = np.array([d[1] for d in dataset])
-    val_dataset = list(get_sequences(random=True, split_ratio=0.25))
-    X_val = np.array([d[0] for d in val_dataset])
-    y_val = np.array([d[1] for d in val_dataset])
-
-    # # Calculate class weights
-    # class_weights = compute_class_weight('balanced', classes=np.unique(y_train), y=y_train.flatten())
-    # class_weight_dict = dict(enumerate(class_weights))
+    data_iter = process_data("./data/quick")
+    X = tf.convert_to_tensor(data_iter[0], dtype=tf.float16)
+    y = tf.convert_to_tensor(data_iter[1], dtype=tf.float16)
 
     callbacks = [
-        ModelCheckpoint(FILENAME, monitor="loss", save_best_only=True, verbose=1),
-        # EarlyStopping(monitor="accuracy", patience=10, restore_best_weights=False),
-        ReduceLROnPlateau(monitor='accuracy', factor=0.8, patience=3, min_lr=0.00001)]
+        ModelCheckpoint(FILENAME, monitor="loss", save_best_only=False, verbose=1),
+        ReduceLROnPlateau(monitor='accuracy', factor=0.5, patience=10, min_lr=0.00001)]
 
-    # if use_wandb:
-    #     wandb_data = list(get_sequences(random=True, split_ratio=0.001))
-    #     X_wandb = [d[0] for d in wandb_data]
-    #     y_wandb = [d[1] for d in wandb_data]
-    #     callbacks.append(CustomEpochEndWandbCallback(X_wandb=X_wandb, y_wandb=y_wandb))
-    #     callbacks.append(WandbMetricsLogger())
-
-    with tf.device("GPU"):
-        logger.info("Training model...")
-        model.fit(X_train, y_train, epochs=EPOCHS, callbacks=callbacks, verbose=1)
-
-    # # Save the model weights
-    # model.save_weights(FILENAME)
-    # logger.info("Saved model weights")
+    logger.info("Training model...")
+    model.fit(X, y, epochs=EPOCHS, batch_size=BATCH_SIZE, callbacks=callbacks, verbose=1, shuffle=True)
 
     if use_wandb:
         wandb.finish()
