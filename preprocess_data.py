@@ -78,7 +78,7 @@ def get_image(image_path, image_height, image_width):
     image = image[0:image.shape[0] - 21, 0:image.shape[1]]
     image = cv2.resize(image, (image_width, image_height))
     image = np.expand_dims(image, axis=-1) # Add an extra channel dimension
-    return image / 255.0
+    return (image / 255.0).astype(np.float16)
 
 
 def is_almost_black(image, threshold=10):
@@ -113,7 +113,7 @@ def balance_classes(sequences, labels):
     # Generate k augmented items for each minor category item
     transformed_removed_major_sequences = []
     augmented_minor_sequences = []
-    for seq in minor_sequences:
+    for seq in tqdm(minor_sequences, leave=False, position=0):
         for _ in range(k):
             augmented_seq = simulate_panning(seq)
             augmented_minor_sequences.append(augmented_seq)
@@ -144,11 +144,11 @@ def process_data(input_dir):
                          key=custom_sort)
     # while True:
     indices = list(range(0, len(image_files) - max(SEQUENCE_LENGTH, BATCH_SIZE)))
-    random.shuffle(indices)
+    # random.shuffle(indices)
     sequences = []
     labels = []
     skipped = []
-    for st in tqdm(indices):
+    for st in tqdm(indices, leave=False, position=0):
         sequence = []
         for image_file in image_files[st:]:
             # print(image_file)

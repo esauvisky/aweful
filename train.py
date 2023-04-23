@@ -64,13 +64,15 @@ def main(use_wandb):
     #                                                output_types=(tf.float16, tf.float16),
     #                                                output_shapes=((SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, 1), ())).batch(BATCH_SIZE).prefetch(tf.data.experimental.AUTOTUNE)
 
-    data_iter = process_data("./data/quick")
-    X = tf.convert_to_tensor(data_iter[0], dtype=tf.float16)
-    y = tf.convert_to_tensor(data_iter[1], dtype=tf.float16)
+    data_iter = process_data("./data/raw")
+    # X = tf.convert_to_tensor(data_iter[0], dtype=tf.float16)
+    # y = tf.convert_to_tensor(data_iter[1], dtype=tf.float16)
+    X = data_iter[0]
+    y = data_iter[1]
 
     callbacks = [
-        ModelCheckpoint(FILENAME, monitor="loss", save_best_only=False, verbose=1),
-        ReduceLROnPlateau(monitor='accuracy', factor=0.5, patience=10, min_lr=0.00001)]
+        ModelCheckpoint(FILENAME, monitor="loss", save_best_only=True, verbose=1),
+        ReduceLROnPlateau(monitor='accuracy', factor=0.5, patience=5, min_lr=0.00001, min_delta=0.001)]
 
     logger.info("Training model...")
     model.fit(X, y, epochs=EPOCHS, batch_size=BATCH_SIZE, callbacks=callbacks, verbose=1, shuffle=True)
