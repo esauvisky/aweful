@@ -26,6 +26,18 @@ from hyperparameters import BATCH_SIZE, SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WID
 from skimage.metrics import structural_similarity as ssim
 from skimage import exposure
 
+def setup_logging(level = "DEBUG", show_module = False):
+    """
+    Setups better log format for loguru
+    """
+    logger.remove(0)  # Remove the default logger
+    log_level = level
+    log_fmt = u"<green>["
+    log_fmt += u"{file:10.10}…:{line:<3} | " if show_module else ""
+    log_fmt += u"{time:HH:mm:ss.SSS}]</green> <level>{level: <8}</level> | <level>{message}</level>"
+    logger.add(lambda x: tqdm.tqdm.write(x, end=""), level=log_level, format=log_fmt, colorize=True, backtrace=True, diagnose=True)
+
+setup_logging("DEBUG")
 
 def set_seed(seed=0):
     global SEED
@@ -51,14 +63,14 @@ def show_image(image):
 
 def simulate_panning(images):
     global SEED
-    datagen = ImageDataGenerator(height_shift_range=0.05, width_shift_range=0.05, fill_mode='reflect')
+    datagen = ImageDataGenerator(height_shift_range=0.02, width_shift_range=0.12, fill_mode='reflect')
 
     # Add an extra dimension for the batch size
-    images = np.array(images)
+    images = np.array(np.array(images) * 255.0, dtype=np.uint8)
     transformation_matrix = datagen.get_random_transform(images.shape[1:], SEED)
 
     augmented_images = [datagen.apply_transform(image, transformation_matrix) for image in images]
-
+    augmented_images = (np.array(augmented_images) / 255.0).astype(np.float32)
     return augmented_images
 
 
@@ -78,7 +90,7 @@ def get_image(image_path, image_height, image_width):
     image = image[0:image.shape[0] - 21, 0:image.shape[1]]
     image = cv2.resize(image, (image_width, image_height))
     image = np.expand_dims(image, axis=-1) # Add an extra channel dimension
-    return (image / 255.0).astype(np.float16)
+    return (image / 255.0).astype(np.float32)
 
 
 def is_almost_black(image, threshold=10):
@@ -95,6 +107,7 @@ def similarity(image1, image2):
     image2 = (np.squeeze(image2, axis=-1) * 255).astype(np.uint8)
     similarity = ssim(image1, image2)
     return similarity
+
 
 def balance_classes(sequences, labels):
     # Count the occurrences of each label
@@ -125,44 +138,35 @@ def balance_classes(sequences, labels):
 
     # Combine the major sequences, augmented minor sequences, and transformed removed major sequences
     balanced_sequences = major_sequences + augmented_minor_sequences + transformed_removed_major_sequences
-    balanced_labels = (
-        [major_category] * len(major_sequences)
-        + [minor_category] * len(augmented_minor_sequences)
-        + [major_category] * len(transformed_removed_major_sequences)
-    )
+    balanced_labels = ([major_category] * len(major_sequences) + [minor_category] * len(augmented_minor_sequences) + [
+        major_category] * len(transformed_removed_major_sequences))
     # pairs = list(zip(balanced_sequences, balanced_labels))
     # random.shuffle(pairs)
     # balanced_sequences, balanced_labels = zip(*pairs)
     return balanced_sequences, balanced_labels
 
-def process_data(input_dir):
-    def custom_sort(file):
-        numbers = [int(x) for x in re.findall(r'\d+', file)]
-        return numbers
 
-    image_files = sorted((os.path.join(input_dir, file) for file in os.listdir(input_dir) if file.endswith(".jpg")),
-                         key=custom_sort)
-    # while True:
+def process_data_chunk(image_files, shuffle, progress_bar):
+
     indices = list(range(0, len(image_files) - max(SEQUENCE_LENGTH, BATCH_SIZE)))
-    # random.shuffle(indices)
-    sequences = []
-    labels = []
-    skipped = []
-    for st in tqdm(indices, leave=False, position=0):
+    if shuffle:
+        random.shuffle(indices)
+    sequences, labels, skipped = [], [], []
+    for st in indices:
         sequence = []
+        progress_bar.update(1)
         for image_file in image_files[st:]:
             # print(image_file)
             image = get_image(image_file, IMAGE_HEIGHT, IMAGE_WIDTH)
             if is_almost_black(image):
-                if image_file in skipped:
-                    logger.info(f"{image_file} is skipped. Skipping")
-                else:
+                if image_file not in skipped:
                     skipped.append(image_file)
-                    logger.info(f"{image_file} is almost entirely black. Skipping")
+                    logger.info(f"{os.path.basename(image_file)} is almost entirely black. Skipping...")
                 continue
             elif len(sequence) > 0 and similarity(image, sequence[-1]) < 0.7:
-                if not is_almost_black(sequence[-1]):
-                    logger.info(f"{image_file}: too different with previous ({similarity(image, sequence[-1])})")
+                if not is_almost_black(sequence[-1]) and image_file not in skipped:
+                    logger.info(f"{os.path.basename(image_file)} is too different from the previous pic ({similarity(image, sequence[-1]):.2f})")
+                    skipped.append(image_file)
                 break
             sequence.append(image)
             label = 1 if "sleep" in image_file else 0
@@ -171,21 +175,60 @@ def process_data(input_dir):
         if len(sequence) != SEQUENCE_LENGTH:
             logger.debug(f"Sequence not enough in length {len(sequence)}, skipping")
             continue
+        # yield sequence, label
         sequences.append(sequence)
         labels.append(label)
-
-        # yield np.array(sequence), label
-
-    X, y = balance_classes(sequences, labels)
-    # X = sequences
-    # y = labels
     # for ix in range(0, 500, SEQUENCE_LENGTH * 10):
     #     display_image_grid_from_arrays(sequences_aug[ix:], rows=10)
     # for ix in range(0, 500, SEQUENCE_LENGTH * 10):
     #     display_image_grid_from_arrays(sequences[ix:], rows=10)
-    print(f"There are {len(image_files)} images and {len(X)} sequences from which {sum(y)} are label 1 ({sum(y)/len(y)*100:.2f}%)")
-    X = np.array(X, dtype=np.float16)
-    y = np.array(y, dtype=np.float16)
+
+    return sequences, labels
+
+
+def process_data(input_dir, shuffle=False, balance=True, num_threads=16):
+    # Split the image files into smaller chunks
+    image_files = sorted((os.path.join(input_dir, file) for file in os.listdir(input_dir) if file.endswith(".jpg")),
+                         key=lambda file: [int(x) for x in re.findall(r'\d+', file)])
+
+    chunk_size = len(image_files) // num_threads
+    input_chunks = []
+
+    for i in range(num_threads):
+        start = i * chunk_size
+        end = (i+1) * chunk_size if i < num_threads - 1 else len(image_files)
+        input_chunks.append(image_files[start:end])
+
+    # Merge results
+    X, y = [], []
+    with ThreadPoolExecutor(max_workers=THREADS) as executor:
+        # Create the tqdm progress bar
+        progress_bar = tqdm(total=len(image_files) - SEQUENCE_LENGTH,
+                            smoothing=0.1,
+                            desc="Processing images...",
+                            position=0,
+                            leave=True)
+
+        futures = [
+            executor.submit(process_data_chunk, chunk, shuffle, progress_bar) for chunk in input_chunks]
+
+        # Use as_completed() to process the results as they become available, and update the progress bar
+        for future in as_completed(futures):
+            X_chunk, y_chunk = future.result()
+            X.extend(X_chunk)
+            y.extend(y_chunk)
+
+        progress_bar.close()
+
+    if balance:
+        X, y = balance_classes(X, y)
+    else:
+        X, y = X, y
+
+    logger.info(f"There are {len(image_files)} images and {len(X)} sequences ({np.shape(X)}) from which {sum(y)} are label 1 ({sum(y)/len(y)*100:.2f}%)")
+    X = np.array(X, dtype=np.float32)
+    y = np.array(y, dtype=np.float32)
+
     return X, y
 
 

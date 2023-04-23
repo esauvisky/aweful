@@ -19,3 +19,5 @@ install==1.3.5
 install==1.3.5
 scikit-image==0.20.0
 matplotlib==3.7.1
+moviepy==1.0.3
+imageio==2.27.0

@@ -8,6 +8,8 @@ import shlex
 import shutil
 import subprocess
 
+import tqdm
+
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import sys
 
@@ -27,26 +29,39 @@ from preprocess_data import get_image, process_data
 from wandb_custom import CustomBatchEndCallback
 
 from hyperparameters import SEQUENCE_LENGTH, IMAGE_HEIGHT, IMAGE_WIDTH, FILENAME, DATASET_NAME, create_model
+from loguru import logger
+import sys
 
+def setup_logging(level = "DEBUG", show_module = False):
+    """
+    Setups better log format for loguru
+    """
+    logger.remove()  # Remove the default logger
+    log_level = level
+    log_fmt = u"<green>["
+    log_fmt += u"{file:10.10}…:{line:<3} | " if show_module else ""
+    log_fmt += u"{time:HH:mm:ss.SSS}]</green> <level>{level: <8}</level> | <level>{message}</level>"
+    logger.add(lambda x: tqdm.tqdm.write(x, end=""), level=log_level, format=log_fmt, colorize=True, backtrace=True, diagnose=True)
+
+setup_logging("DEBUG")
 
 def test_all_in_order(model):
-    with tf.device("CPU"):
-        data = process_data("./data/raw")
-        Xx = data[0]
-        yy = data[1]
-        y_out = model.predict(Xx, verbose=1)
-        for i in range(len(yy)):
-            y_pred = np.round(y_out[i])[0].astype(int)
-            prediction = " Awake" if y_pred == 0 else " Sleep"
-            # y_out = model.predict(np.array([Xx[0]]), verbose=0)
-            # y_pred = np.round(y_out).flatten().astype(int)[0]
+    data = process_data("./data/quick")
+    Xx = data[0]
+    yy = data[1]
+    y_out = model.predict(Xx, verbose=1)
+    for i in range(len(yy)):
+        y_pred = np.round(y_out[i])[0].astype(int)
+        prediction = " 🆙]" if y_pred == 0 else " 💤]"
+        # y_out = model.predict(np.array([Xx[0]]), verbose=0)
+        # y_pred = np.round(y_out).flatten().astype(int)[0]
 
-            if y_pred != yy[i]:
-                color = "\033[91m ❌"
-            else:
-                color = "\033[92m ✅"
+        if y_pred != yy[i]:
+            color = "\033[91m [❌"
+        else:
+            color = "\033[92m [✅"
 
-            print(color + str(prediction) + "\033[0m\t", end="")
+        print(color + str(prediction) + "\033[0m\t", end="")
 
 
 if __name__ == "__main__":
@@ -63,7 +78,7 @@ if __name__ == "__main__":
 
     sleep_counter = list()
     images = list()
-    path = "./data/quick/"
+    path = "./data/new/"
 
     model = create_model()
     if os.path.exists(FILENAME):
@@ -75,7 +90,7 @@ if __name__ == "__main__":
         logger.error(f"Could not find file '{FILENAME}'")
         sys.exit(1)
 
-    # test_all_in_order(model)
+    test_all_in_order(model)
 
     while True:
         if len(sleep_counter) >= 6 * 60:
@@ -99,7 +114,7 @@ if __name__ == "__main__":
 
         image_utils.save_img("/tmp/test.png", image)
         with tf.device("CPU"):
-            y_loop = model.predict(np.array([images], dtype=np.float16), verbose=1)
+            y_loop = model.predict(np.array([images], dtype=np.float32), verbose=1)
 
         y_loop_class = np.round(y_loop).flatten().astype(int)[0]
 
